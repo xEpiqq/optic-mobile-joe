@@ -1,0 +1,2339 @@
+
+/app/(auth)/login.jsx
+import React, { useState, useEffect } from 'react';
+import { Alert, View, TextInput, Text, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import { useSupabase } from '../../contexts/SupabaseContext';
+import { router } from 'expo-router';
+
+export default function Login() {
+  const { supabase, organization } = useSupabase();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!organization) {
+      router.replace('/(auth)/SelectOrganization');
+    }
+  }, [organization]);
+
+  async function signInWithEmail() {
+    if (!supabase) {
+      Alert.alert("No organization selected", "Please select an organization first.");
+      return;
+    }
+
+    setLoading(true);
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email,
+      password: password,
+    });
+
+    if (error) {
+      Alert.alert("Authentication Error", error.message);
+    } else {
+      router.replace("/(tabs)");
+    }
+    setLoading(false);
+  }
+
+  return (
+    <View className="flex-1 bg-zinc-900 px-6 pb-6 justify-center items-center">
+      {/* Logo positioned at the top left */}
+      <View className="absolute top-12 left-6">
+        {/* <Image
+          source={require('../assets/images/logo.png')}
+          className="w-14 h-8 opacity-30"
+        /> */}
+      </View>
+
+      {/* Centered Title and Subtext */}
+      <View className="items-center mt-8">
+        <Text className="text-zinc-100 text-2xl font-bold">Optic D2D</Text>
+        <Text className="text-zinc-400 text-lg mt-1">Sell Fiber Fast</Text>
+      </View>
+
+      {/* Input Fields */}
+      <View className="w-full max-w-md space-y-4 mt-8">
+        <TextInput
+          className="bg-zinc-800 text-white placeholder-white rounded-md border border-gray-700 py-2 px-4"
+          onChangeText={(text) => setEmail(text)}
+          value={email}
+          placeholder="Email"
+          placeholderTextColor="white"
+          autoCapitalize="none"
+          keyboardType="email-address"
+        />
+        <TextInput
+          className="bg-zinc-800 text-white placeholder-white rounded-md border border-gray-700 py-2 px-4"
+          onChangeText={(text) => setPassword(text)}
+          value={password}
+          secureTextEntry={true}
+          placeholder="Password"
+          placeholderTextColor="white"
+          autoCapitalize="none"
+        />
+      </View>
+
+      {/* Forgot password and Remember me */}
+      <View className="flex-row items-center justify-between w-full max-w-md mt-4">
+        <TouchableOpacity>
+          <Text className="text-indigo-400">Forgot password?</Text>
+        </TouchableOpacity>
+        <TouchableOpacity>
+          <Text className="text-sm text-zinc-400">Remember me</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Sign In Button */}
+      <View className="w-full max-w-md mt-6">
+        <TouchableOpacity
+          className={`bg-indigo-600 py-2 rounded-md text-center ${loading ? 'opacity-50' : ''}`}
+          disabled={loading}
+          onPress={signInWithEmail}
+        >
+          <Text className="text-zinc-100 text-center font-semibold">
+            {loading ? <ActivityIndicator color="#ffffff" /> : 'Sign in'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
+/app/(auth)/SelectOrganization.jsx
+import React from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
+import { useSupabase } from '../../contexts/SupabaseContext';
+import { router } from 'expo-router';
+
+export default function SelectOrganization() {
+  const { selectOrganization, loading } = useSupabase();
+
+  const handleSelectOrg = async (orgId) => {
+    await selectOrganization(orgId); // Ensure org selection and client reinitialization
+    if (!loading) {
+      router.replace('/(auth)/login'); // Navigate to login after loading completes
+    }
+  };
+
+  if (loading) {
+    return (
+      <View className="flex-1 justify-center items-center bg-zinc-900">
+        <ActivityIndicator size="large" color="#4f46e5" />
+      </View>
+    );
+  }
+
+  return (
+    <View className="flex-1 bg-zinc-900 px-6 pb-6 justify-center items-center">
+      {/* Logo positioned at the top left */}
+      <View className="absolute top-12 left-6">
+        <Image
+          source={require('../../assets/images/logo.png')}
+          className="w-14 h-8 opacity-30"
+        />
+      </View>
+
+      {/* Title and Subtitle */}
+      <View className="items-center mt-8">
+        <Text className="text-zinc-100 text-2xl font-bold">Optic D2D</Text>
+        <Text className="text-zinc-400 text-lg mt-1">Select Your Organization</Text>
+      </View>
+
+      {/* Organization Options */}
+      <View className="w-full max-w-md space-y-4 mt-8">
+        <TouchableOpacity
+          onPress={() => handleSelectOrg('org1')}
+          className="bg-red-900 py-4 rounded-md"
+        >
+          <Text className="text-zinc-100 text-center font-semibold">Anand's Team</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleSelectOrg('org2')}
+          className="bg-green-900 py-4 rounded-md"
+        >
+          <Text className="text-zinc-100 text-center font-semibold">Greg's Team</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleSelectOrg('org3')}
+          className="bg-blue-900 py-4 rounded-md"
+        >
+          <Text className="text-zinc-100 text-center font-semibold">Invictus</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleSelectOrg('org4')}
+          className="bg-purple-900 py-4 rounded-md"
+        >
+          <Text className="text-zinc-100 text-center font-semibold">Blake's Team</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => handleSelectOrg('org5')}
+          className="bg-zinc-900 py-4 rounded-md"
+        >
+          <Text className="text-zinc-100 text-center font-semibold">Paul's Team</Text>
+        </TouchableOpacity>
+        {/* Add more organizations if needed */}
+      </View>
+    </View>
+  );
+}
+
+
+/app/(auth)/_layout.jsx
+import { Stack } from "expo-router";
+
+export default function AuthLayout() {
+  return <Stack screenOptions={{ headerShown: false }} />;
+}
+
+
+
+
+/app/(tabs)/index.jsx
+import {
+  Image,
+  View,
+  Text,
+  TouchableOpacity,
+  Dimensions,
+  TextInput,
+  Modal,
+  ScrollView,
+  Switch,
+  Linking,
+  Platform,
+  StatusBar
+} from 'react-native';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
+import { useClusterer } from 'react-native-clusterer';
+import * as Location from 'expo-location';
+import { WebView } from 'react-native-webview';
+import { useSupabase } from '../../contexts/SupabaseContext';
+import 'react-native-url-polyfill/auto';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Helper to chunk arrays so we don't send too-large .in() requests
+function chunkArray(arr, size) {
+  const chunks = [];
+  for (let i = 0; i < arr.length; i += size) {
+    chunks.push(arr.slice(i, i + size));
+  }
+  return chunks;
+}
+
+const CREDENTIAL_TYPE_KEY = 'CREDENTIAL_TYPE';
+const { width, height } = Dimensions.get('window');
+const MAP_DIMENSIONS = { width, height };
+const BUFFER_FACTOR = 2;
+
+export default function Tab() {
+  const { supabase } = useSupabase();
+  const [bigMenu, setBigMenu] = useState(false);
+  const [leads, setLeads] = useState([]);
+  const [initialRegion, setInitialRegion] = useState({
+    latitude: 40.5853,
+    longitude: -105.0844,
+    latitudeDelta: 1,
+    longitudeDelta: 1,
+  });
+  const mapRef = useRef(null);
+  const [locationPermission, setLocationPermission] = useState(null);
+  const [polygonPoints, setPolygonPoints] = useState([]);
+  const [userLocation, setUserLocation] = useState(null);
+  const [optimisticLocation, setOptimisticLocation] = useState(null);
+  const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+  const [saveMessage, setSaveMessage] = useState('');
+  const [region, setRegion] = useState(initialRegion);
+
+  // Always clustering to avoid 5k direct markers:
+  const [isClustering] = useState(true);
+
+  const [isSatellite, setIsSatellite] = useState(false);
+  const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [recentNote, setRecentNote] = useState(null);
+  const [leadAddress, setLeadAddress] = useState(null);
+  const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
+  const [isFullNotesModalVisible, setIsFullNotesModalVisible] = useState(false);
+  const [allNotes, setAllNotes] = useState([]);
+  const [startSaleModal, setStartSaleModal] = useState(false);
+  const [dummyRender, setDummyRender] = useState(false);
+  const selectedLead = useRef(null);
+  const selectedPlan = useRef(null);
+  const showCredentialsRef = useRef(false);
+  const uasapRef = useRef('');
+  const pasapRef = useRef('');
+  const ubassRef = useRef('');
+  const pbassRef = useRef('');
+  const firstName = useRef('');
+  const lastName = useRef('');
+  const phone = useRef('');
+  const email = useRef('');
+  const dob = useRef('');
+  const asapZip = useRef('');
+  const asapAddress = useRef('');
+  const asapCity = useRef('');
+  const asapUasap = useRef('');
+  const asapPasap = useRef('');
+  const recentLead = useRef('');
+  const noteInputRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [credentialType, setCredentialType] = useState('ASAP');
+
+  // Load credential type, fetch leads, get location
+  useEffect(() => {
+    const loadCredentialType = async () => {
+      try {
+        const storedType = await AsyncStorage.getItem(CREDENTIAL_TYPE_KEY);
+        if (storedType) setCredentialType(storedType);
+      } catch (error) {
+        console.error('Failed to load credential type:', error);
+      }
+    };
+    loadCredentialType();
+    fetchLeads();
+    requestLocationPermissionAndFetch();
+
+    return () => {
+      saveMapState(region);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const saveCredentialType = async () => {
+      try {
+        await AsyncStorage.setItem(CREDENTIAL_TYPE_KEY, credentialType);
+      } catch (error) {
+        console.error('Failed to save credential type:', error);
+      }
+    };
+    saveCredentialType();
+  }, [credentialType]);
+
+  useEffect(() => {
+    if (isNoteModalVisible && noteInputRef.current) {
+      noteInputRef.current.focus();
+    }
+  }, [isNoteModalVisible]);
+
+  
+  /**
+   * Fetch leads in two steps and unify with chunked "in" query:
+   *   1) .eq('user_id', userId)
+   *   2) .eq('manager_id', userId) in restaurants_managers => get restaurant_id
+   * Then unify those IDs in a single set, chunk if large, final .in().
+   */
+  async function fetchLeads() {
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData?.user) return;
+    const userId = userData.user.id;
+
+    try {
+      // 1) Direct leads
+      const { data: directAssigned, error: e1 } = await supabase
+        .from('restaurants')
+        .select('id, location, status, knocks')
+        .eq('user_id', userId);
+      if (e1) return console.error('Error fetching direct leads:', e1);
+
+      // 2) Manager leads
+      const { data: managerAssigned, error: e2 } = await supabase
+        .from('restaurants_managers')
+        .select('restaurant_id')
+        .eq('manager_id', userId);
+      if (e2) return console.error('Error fetching manager leads:', e2);
+
+      // Combine
+      const combinedIds = new Set([
+        ...(directAssigned || []).map((r) => r.id),
+        ...(managerAssigned || []).map((rm) => rm.restaurant_id),
+      ]);
+      if (!combinedIds.size) {
+        setLeads([]);
+        return;
+      }
+
+      // 3) Final fetch with chunked in() calls
+      let finalLeads = [];
+      const allIds = Array.from(combinedIds);
+      const chunks = chunkArray(allIds, 200);
+
+      for (const c of chunks) {
+        const { data, error } = await supabase
+          .from('restaurants')
+          .select('id, location, status, knocks')
+          .in('id', c);
+
+        if (error) {
+          console.error('Error fetching chunk of leads:', error);
+          continue;
+        }
+        finalLeads = finalLeads.concat(data);
+      }
+
+      const formatted = finalLeads.map((lead) => ({
+        ...lead,
+        latitude: lead.location?.coordinates?.[1],
+        longitude: lead.location?.coordinates?.[0],
+      }));
+      setLeads(formatted);
+    } catch (err) {
+      console.error('Unexpected error fetching leads:', err);
+    }
+  }
+
+  async function requestLocationPermissionAndFetch() {
+    const { status } = await Location.requestForegroundPermissionsAsync();
+    setLocationPermission(status === 'granted');
+    if (status !== 'granted') {
+      console.error('Location permission not granted');
+      return;
+    }
+
+    const lastKnownLocation = await Location.getLastKnownPositionAsync({});
+    if (lastKnownLocation) {
+      setOptimisticLocation({
+        latitude: lastKnownLocation.coords.latitude,
+        longitude: lastKnownLocation.coords.longitude,
+      });
+    }
+
+    const location = await Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Highest,
+    });
+    setUserLocation({
+      latitude: location.coords.latitude,
+      longitude: location.coords.longitude,
+    });
+  }
+
+  function toggleCredentialsInputs() {
+    showCredentialsRef.current = !showCredentialsRef.current;
+    setDummyRender((prev) => !prev);
+  }
+
+  async function saveCredentialsToDatabase() {
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData?.user) return;
+
+    let updateData = {};
+    if (credentialType === 'ASAP') {
+      updateData = { uasap: uasapRef.current, pasap: pasapRef.current };
+    } else {
+      updateData = { ubass: ubassRef.current, pbass: pbassRef.current };
+    }
+
+    const { error } = await supabase
+      .from('profiles')
+      .update(updateData)
+      .eq('user_id', userData.user.id);
+
+    if (error) return console.error('Error saving credentials:', error);
+
+    setSaveMessage('Credentials saved successfully!');
+    setTimeout(() => setSaveMessage(''), 3000);
+  }
+
+  async function handleLogout() {
+    setIsSettingsModalVisible(false);
+    setTimeout(async () => {
+      const { error } = await supabase.auth.signOut();
+      if (error) return console.error('Logout failed:', error);
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (!sessionData?.session) navigation.replace('/(auth)/SelectOrganization');
+      else navigation.navigate('Auth');
+    }, 300);
+  }
+
+  async function saveMapState(regionToSave) {
+    // For saving map state if needed
+  }
+
+  function onRegionChangeComplete(newRegion) {
+    // We keep cluster always on, just store region
+    setRegion(newRegion);
+    saveMapState(newRegion);
+  }
+
+  function getPinColor(status) {
+    const statusColors = {
+      0: '#6A0DAD', // New
+      1: '#FFD700', // Gone
+      2: '#1E90FF', // Later
+      3: '#FF6347', // Nope
+      4: '#32CD32', // Sold
+      5: '#00008B', // Return
+    };
+    return statusColors[status] || '#6A0DAD';
+  }
+
+  async function updateLeadStatus(leadId, newStatus) {
+    setLeads((prevLeads) =>
+      prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
+    );
+    try {
+      const { error } = await supabase
+        .from('restaurants')
+        .update({ status: newStatus })
+        .eq('id', leadId);
+
+      if (error) {
+        console.error('Error updating lead status:', error);
+        fetchLeads();
+      }
+    } catch (err) {
+      console.error('Unexpected error updating lead status:', err);
+      fetchLeads();
+    }
+  }
+
+  async function fetchMostRecentNote(restaurantId) {
+    const { data, error } = await supabase
+      .from('notes')
+      .select('note, created_at')
+      .eq('restaurant_id', restaurantId)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error || !data.length) return setRecentNote(null);
+    setRecentNote(data[0]);
+  }
+
+  async function fetchLeadAddress(restaurantId) {
+    const { data, error } = await supabase
+      .from('restaurants')
+      .select('address, address2')
+      .eq('id', restaurantId)
+      .single();
+    if (error) return console.error('Error fetching address:', error);
+    const fullAddress = `${data.address} ${data.address2 || ''}`;
+    setLeadAddress(fullAddress.trim());
+  }
+
+  function openMaps() {
+    if (!selectedLead.current) return console.error('No lead selected.');
+    const { latitude, longitude } = selectedLead.current;
+    const url = Platform.select({
+      ios: `http://maps.apple.com/?ll=${latitude},${longitude}`,
+      android: `http://maps.google.com/?q=${latitude},${longitude}`,
+    });
+    Linking.openURL(url).catch((err) => console.error('Failed to open map:', err));
+  }
+
+  function showMenu(lead, event) {
+    if (recentNote !== '') setRecentNote('');
+    recentLead.current = lead;
+
+    const { coordinate } = event.nativeEvent;
+    mapRef.current.pointForCoordinate(coordinate).then((point) => {
+      const x = point.x - width / 2;
+      const y = point.y - height / 2;
+      selectedLead.current = lead;
+      fetchMostRecentNote(lead.id);
+      fetchLeadAddress(lead.id);
+      setMenuPosition({ x, y: y - 100 });
+    });
+  }
+
+  function showBigMenu(lead) {
+    selectedLead.current = lead;
+    setBigMenu(true);
+    handleDragStart(lead);
+  }
+
+  function closeBigMenu() {
+    setBigMenu(false);
+    selectedLead.current = null;
+    firstName.current = '';
+    lastName.current = '';
+    phone.current = '';
+    email.current = '';
+  }
+
+  async function handleDragStart(lead) {
+    recentLead.current = lead;
+    setBigMenu(true);
+    try {
+      const { data, error } = await supabase
+        .from('restaurants')
+        .select('first_name, last_name, email, phone, dob')
+        .eq('id', lead.id)
+        .single();
+      if (error) return console.error('Error fetching lead data:', error);
+
+      if (data) {
+        firstName.current = data.first_name || '';
+        lastName.current = data.last_name || '';
+        phone.current = data.phone || '';
+        email.current = data.email || '';
+        dob.current = data.dob || '';
+      }
+      setDummyRender((prev) => !prev);
+    } catch (err) {
+      console.error('Error querying Supabase:', err);
+    }
+  }
+
+  function handleDragEnd(lead, event) {
+    // If needed
+  }
+
+  async function addNote() {
+    const trimmedNote = noteText.trim();
+    if (!trimmedNote) return;
+    setRecentNote({ note: trimmedNote, created_at: new Date().toISOString() });
+    setNoteText('');
+    setIsNoteModalVisible(false);
+
+    const { data: userData } = await supabase.auth.getUser();
+    if (!userData?.user) return;
+
+    const { error } = await supabase.from('notes').insert({
+      restaurant_id: recentLead.current.id,
+      note: trimmedNote,
+      created_by: userData.user.id,
+    });
+    if (error) {
+      console.error('Error adding note:', error);
+      setRecentNote(null);
+    }
+    setDummyRender((prev) => !prev);
+  }
+
+  function formatDob(d) {
+    if (d && d.length === 8 && !d.includes('/')) {
+      return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4, 8)}`;
+    }
+    return d;
+  }
+
+  async function startSale() {
+    setStartSaleModal(true);
+    setBigMenu(false);
+    if (!recentLead.current?.id) return console.error('No recent lead found.');
+
+    const { data, error } = await supabase
+      .from('restaurants')
+      .select('address, zip5, city')
+      .eq('id', recentLead.current.id)
+      .single();
+    if (error) return console.error('Error fetching lead info:', error);
+
+    const { data: userData } = await supabase.auth.getUser();
+    const { data: asaplogin, error: asapError } = await supabase
+      .from('profiles')
+      .select('uasap, pasap, ubass, pbass')
+      .eq('user_id', userData.user.id)
+      .single();
+    if (asapError) return console.error('Error fetching login info:', asapError);
+
+    if (credentialType === 'ASAP') {
+      asapPasap.current = asaplogin.pasap;
+      asapUasap.current = asaplogin.uasap;
+    } else {
+      asapPasap.current = asaplogin.pbass;
+      asapUasap.current = asaplogin.ubass;
+    }
+
+    asapAddress.current = data.address;
+    asapZip.current = data.zip5;
+    asapCity.current = data.city;
+
+    const { error: insertError } = await supabase
+      .from('restaurants')
+      .update({
+        first_name: firstName.current.trim(),
+        last_name: lastName.current.trim(),
+        email: email.current.trim(),
+        phone: phone.current.trim(),
+        dob: dob.current.trim(),
+      })
+      .eq('id', recentLead.current.id);
+    if (insertError) console.error('Error inserting lead info:', insertError);
+  }
+
+  function injectLogin() {
+    setTimeout(() => {
+      const script = `
+        document.querySelector('input[name="loginForm$UserName"]').value = "${asapUasap.current}";
+        document.querySelector('input[name="loginForm$Password"]').value = "${asapPasap.current}";
+        document.querySelector('input[name="loginForm$LoginButton"]').click();
+      `;
+      this.webref.injectJavaScript(script);
+    }, 500);
+  }
+
+  function injectNavigate() {
+    const script = `
+      window.location.href = 'https://${credentialType.toLowerCase()}.docxtract.com/Orders/PrequalOrder.aspx';
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectFill() {
+    const script = `
+      (async function() {
+        document.getElementById('ctl00_ContentPlaceHolder1_rdoCustomerType_0').setAttribute('checked', 'checked');
+        document.getElementById('ctl00_ContentPlaceHolder1_txtZipCode').value = '${asapZip.current}';
+        document.getElementById('ctl00_ContentPlaceHolder1_btnCheckCallRecording').click();
+
+        while (!document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtStreetAddress"]')) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        document.getElementById('ctl00_ContentPlaceHolder1_ddlTypeOfSale').removeAttribute('disabled');
+        document.getElementById('ctl00_ContentPlaceHolder1_ddlTypeOfSale').value = Array.from(document.getElementById('ctl00_ContentPlaceHolder1_ddlTypeOfSale').options)
+          .find(option => option.text.trim() === 'CUSTOMER PREMISE').value;
+
+        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtStreetAddress"]').value = '${asapAddress.current}';
+        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtCity"]').value = '${asapCity.current}';
+        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtFirstName"]').value = '${firstName.current}';
+        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtLastName"]').value = '${lastName.current}';
+        document.getElementById('ctl00_ContentPlaceHolder1_txtCBR').value = '${phone.current}';
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+        document.querySelector('a[onclick="initPage()"]').click();
+      })();
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectFill2() {
+    const script = `
+      const waitForElement = (sel, t=5000) => {
+        return new Promise((res, rej) => {
+          const i=100; const e=Date.now()+t;
+          const c=setInterval(()=>{
+            const el=document.querySelector(sel);
+            if(el){clearInterval(c);res(el);}
+            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
+          },i);
+        });
+      };
+      waitForElement('input[value="radioBroadbandFactsCompleted"]')
+        .then(radio=>{
+          radio.click();
+          setTimeout(()=>{
+            waitForElement('input[value="Continue"]')
+              .then(btn=>btn.click())
+              .catch(e=>console.error('No continue btn:',e));
+          },200);
+        })
+        .catch(e=>console.error('No broadbandFacts radio:',e));
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectDob() {
+    const f = formatDob(dob.current);
+    const script = `
+      const waitForElement=(sel,t=5000)=>{
+        return new Promise((res,rej)=>{
+          const i=100; const e=Date.now()+t;
+          const c=setInterval(()=>{
+            const el=document.querySelector(sel);
+            if(el){clearInterval(c);res(el);}
+            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
+          },i);
+        });
+      };
+      waitForElement('input[id="ctl00_ContentPlaceHolder1_RadDOB_dateInput"]')
+        .then(dobInput=>{
+          dobInput.value='${f}';
+          dobInput.dispatchEvent(new Event('change',{bubbles:true}));
+          dobInput.focus();
+          setTimeout(()=>{
+            dobInput.blur();
+            const out=document.querySelector('div.row-l-c');
+            if(out){
+              out.click();
+              const cont=document.querySelector('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]');
+              if(cont) setTimeout(()=>cont.click(),200);
+            }
+          },100);
+        })
+        .catch(e=>console.error('DOB injection fail:',e));
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectOptions() {
+    const script = `
+      const waitForElement=(sel,t=5000)=>{
+        return new Promise((res,rej)=>{
+          const i=100; const e=Date.now()+t;
+          const c=setInterval(()=>{
+            const el=document.querySelector(sel);
+            if(el){clearInterval(c);res(el);}
+            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
+          },i);
+        });
+      };
+      waitForElement('input[value="PX_QTM_WIFI_FREE"]')
+        .then(wifi=>{
+          wifi.click();
+          setTimeout(()=>{
+            waitForElement('input[value="PX_QTM_SVC_TECHINST_FREE"]')
+              .then(tech=>{
+                tech.click();
+                waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]')
+                  .then(btn=> setTimeout(()=>btn.click(),200))
+                  .catch(e=>console.error('No continue btn:',e));
+              })
+              .catch(e=>console.error('No tech install:',e));
+          },100);
+        })
+        .catch(e=>console.error('No Wi-Fi:',e));
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectEmail() {
+    const script = `
+      const waitForElement=(sel,t=5000)=>{
+        return new Promise((res,rej)=>{
+          const i=100; const e=Date.now()+t;
+          const c=setInterval(()=>{
+            const el=document.querySelector(sel);
+            if(el){clearInterval(c);res(el);}
+            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
+          },i);
+        });
+      };
+      waitForElement('input[name="ctl00$ContentPlaceHolder1$txtContactEmail"]')
+        .then(emailInput=>{
+          emailInput.value='${email.current}';
+          emailInput.dispatchEvent(new Event('change',{bubbles:true}));
+          waitForElement('input[value="radioSMSCapableYes"]')
+            .then(smsYes=>{
+              smsYes.click();
+              setTimeout(()=>{
+                waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]')
+                  .then(btn=>btn.click())
+                  .catch(e=>console.error('No continue btn:',e));
+              },200);
+            })
+            .catch(e=>console.error('No SMSCapableYes:',e));
+        })
+        .catch(e=>console.error('No email input:',e));
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectContinue() {
+    const script = `
+      const waitForElement=(sel,t=5000)=>{
+        return new Promise((res,rej)=>{
+          const i=100; const e=Date.now()+t;
+          const c=setInterval(()=>{
+            const el=document.querySelector(sel);
+            if(el){clearInterval(c);res(el);}
+            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
+          },i);
+        });
+      };
+      waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]')
+        .then(btn=>btn.click())
+        .catch(e=>console.error('No continue btn:',e));
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function injectConfirm() {
+    const script = `
+      const yes=document.querySelector('input[value="radioAddressValidationYes"]');
+      if(yes){
+        yes.click();
+        const c=document.querySelector('input[name="ctl00$ContentPlaceHolder1$btnAddressValidationOK"]');
+        if(c) c.click();
+      }
+    `;
+    this.webref.injectJavaScript(script);
+  }
+
+  function centerMapOnUserLocation() {
+    const loc = userLocation || optimisticLocation;
+    if (mapRef.current && loc && region) {
+      mapRef.current.animateToRegion({
+        latitude: loc.latitude,
+        longitude: loc.longitude,
+        latitudeDelta: region.latitudeDelta,
+        longitudeDelta: region.longitudeDelta,
+      });
+    } else {
+      console.error('User location not available');
+    }
+  }
+
+  function getVisibleLeads() {
+    if (!region) return [];
+    const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+    const buffLat = latitudeDelta * BUFFER_FACTOR;
+    const buffLng = longitudeDelta * BUFFER_FACTOR;
+    const minLat = latitude - buffLat / 2;
+    const maxLat = latitude + buffLat / 2;
+    const minLng = longitude - buffLng / 2;
+    const maxLng = longitude + buffLng / 2;
+    return leads.filter(
+      (lead) =>
+        lead.latitude >= minLat &&
+        lead.latitude <= maxLat &&
+        lead.longitude >= minLng &&
+        lead.longitude <= maxLng
+    );
+  }
+
+  const visibleLeads = getVisibleLeads();
+
+  const geoJSONLeads = useMemo(
+    () =>
+      visibleLeads.map((lead) => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [lead.longitude, lead.latitude] },
+        properties: {
+          id: lead.id,
+          status: lead.status,
+          knocks: lead.knocks || 0,
+          latitude: lead.latitude,
+          longitude: lead.longitude,
+        },
+      })),
+    [visibleLeads]
+  );
+
+  // Force clustering for big datasets
+  const [clusteredPoints, supercluster] = useClusterer(
+    isClustering ? geoJSONLeads : [],
+    MAP_DIMENSIONS,
+    region,
+    { minZoom: 0, maxZoom: 12, minPoints: 2, radius: 40 }
+  );
+
+  function renderStatusMenu() {
+    if (!selectedLead.current) return null;
+    const statuses = ['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'];
+    const colors = ['#800080', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
+
+    return (
+      <>
+        {!bigMenu && (
+          <View>
+            {leadAddress && (
+              <View className="absolute bottom-0 right-0 z-50 p-2.5 px-3 bg-white rounded flex-row items-center">
+                <Text className="text-black font-bold text-base flex-1">{leadAddress}</Text>
+                <TouchableOpacity onPress={openMaps} className="ml-2 p-1">
+                  <Image
+                    source={require('../../assets/images/navigation-icon.png')}
+                    className="w-5 h-5 tint-blue-500"
+                  />
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+        {recentNote && (
+          <View
+            className="bg-white rounded p-2.5 mb-2.5 shadow"
+            style={{
+              position: 'absolute',
+              left: menuPosition.x + width / 2 - 150,
+              top: menuPosition.y + height / 2 - 60,
+            }}
+          >
+            <View className="flex-row items-center">
+              <Text className="text-xs text-gray-800">Recent Note: {recentNote.note}</Text>
+              <TouchableOpacity onPress={() => showFullNotesModal(selectedLead.current.id)}>
+                <Text className="text-blue-500 ml-1 text-lg font-bold">→</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+        <View
+          className="bg-white rounded flex-row justify-around p-1.5 shadow w-75"
+          style={{
+            position: 'absolute',
+            left: menuPosition.x + width / 2 - 150,
+            top: menuPosition.y + height / 2,
+          }}
+        >
+          {statuses.map((status, index) => (
+            <TouchableOpacity
+              key={index}
+              className="p-2.5 items-center"
+              onPress={() => {
+                updateLeadStatus(selectedLead.current.id, index);
+                selectedLead.current = null;
+                setMenuPosition({ x: 0, y: 0 });
+              }}
+            >
+              <View style={{ backgroundColor: colors[index] }} className="h-0.5 w-full mb-0.5" />
+              <Text className="text-xs text-center mt-0.5">{status}</Text>
+            </TouchableOpacity>
+          ))}
+          <TouchableOpacity
+            className="bg-blue-500 rounded-full py-2 px-3 shadow mt-0 absolute right-0 top-16"
+            onPress={() => setIsNoteModalVisible(true)}
+          >
+            <Text className="text-white text-sm font-bold">+Note</Text>
+          </TouchableOpacity>
+        </View>
+      </>
+    );
+  }
+
+  function renderNoteModal() {
+    return (
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isNoteModalVisible}
+        onRequestClose={() => setIsNoteModalVisible(false)}
+      >
+        <View className="flex-1 bg-white">
+          <View className="p-5">
+            <Text className="text-2xl font-semibold mb-4 text-center">Add Note</Text>
+            <TextInput
+              ref={noteInputRef}
+              className="border border-gray-300 rounded-lg p-4 mb-4 text-base bg-gray-50"
+              multiline
+              numberOfLines={6}
+              placeholder="Enter your note here"
+              value={noteText}
+              onChangeText={setNoteText}
+            />
+            <View className="flex-row justify-between mt-4">
+              <TouchableOpacity
+                className="bg-gray-500 py-3 px-6 rounded-lg items-center flex-1 mr-2"
+                onPress={() => setIsNoteModalVisible(false)}
+              >
+                <Text className="text-white font-medium">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="bg-blue-600 py-3 px-6 rounded-lg items-center flex-1 ml-2"
+                onPress={addNote}
+              >
+                <Text className="text-white font-medium">Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  }
+
+  function showFullNotesModal(restaurantId) {
+    fetchAllNotes(restaurantId);
+    setIsFullNotesModalVisible(true);
+  }
+
+  async function fetchAllNotes(restaurantId) {
+    const { data, error } = await supabase
+      .from('notes')
+      .select('note, created_at')
+      .eq('restaurant_id', restaurantId)
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error('Error fetching all notes:', error);
+      setAllNotes([]);
+    } else {
+      setAllNotes(data);
+    }
+  }
+
+  function renderFullNotesModal() {
+    return (
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isFullNotesModalVisible}
+        onRequestClose={() => setIsFullNotesModalVisible(false)}
+      >
+        <View className="flex-1 bg-white p-5 justify-start">
+          <Text className="text-2xl font-bold mb-5 text-center text-gray-800">All Notes</Text>
+          <ScrollView className="flex-1">
+            {allNotes.map((note, index) => (
+              <View key={index} className="p-3.5 border-b border-gray-300">
+                <Text className="text-base text-gray-800">{note.note}</Text>
+                <Text className="text-xs text-gray-500 mt-1.25">
+                  {new Date(note.created_at).toLocaleString()}
+                </Text>
+              </View>
+            ))}
+          </ScrollView>
+          <TouchableOpacity
+            className="bg-blue-500 py-3.5 rounded mt-5 items-center"
+            onPress={() => setIsFullNotesModalVisible(false)}
+          >
+            <Text className="text-white text-lg font-bold">Close</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+    );
+  }
+
+  const memoizedMap = useMemo(
+    () => (
+      <MapView
+        ref={mapRef}
+        provider={PROVIDER_GOOGLE}
+        initialRegion={initialRegion}
+        onRegionChangeComplete={onRegionChangeComplete}
+        className="flex-1"
+        onPress={(e) => {
+          if (isDrawing) {
+            const newPoint = e.nativeEvent.coordinate;
+            setPolygonPoints([...polygonPoints, newPoint]);
+          } else {
+            selectedLead.current = null;
+            setDummyRender((prev) => !prev);
+          }
+        }}
+        moveOnMarkerPress={false}
+        showsUserLocation={locationPermission}
+        scrollEnabled={!isDrawing}
+        mapType={isSatellite ? 'satellite' : 'standard'}
+        showsMyLocationButton={false}
+      >
+        {clusteredPoints.map((point) => {
+          if (point.properties.cluster) {
+            const { cluster_id, point_count } = point.properties;
+            const coordinate = {
+              latitude: point.geometry.coordinates[1],
+              longitude: point.geometry.coordinates[0],
+            };
+            return (
+              <Marker
+                key={`cluster-${cluster_id}`}
+                coordinate={coordinate}
+                tracksViewChanges={false}
+                onPress={() => {
+                  const zoom = supercluster.getClusterExpansionZoom(cluster_id);
+                  const newRegion = {
+                    latitude: coordinate.latitude,
+                    longitude: coordinate.longitude,
+                    latitudeDelta: Math.max(initialRegion.latitudeDelta / 2, 0.005),
+                    longitudeDelta: Math.max(initialRegion.longitudeDelta / 2, 0.005),
+                  };
+                  mapRef.current.animateToRegion(newRegion, 500);
+                }}
+              >
+                <View className="w-10 h-10 rounded-full bg-blue-500 justify-center items-center">
+                  <Text className="text-white font-bold">{point_count}</Text>
+                </View>
+              </Marker>
+            );
+          }
+          const lead = point.properties;
+          return (
+            <Marker
+              key={`${lead.id}-${lead.status}`}
+              coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+              pinColor={getPinColor(lead.status)}
+              tracksViewChanges={false}
+              onPress={(event) => showMenu(lead, event)}
+              onLongPress={() => showBigMenu(lead)}
+              onDragStart={() => handleDragStart(lead)}
+              onDragEnd={(e) => handleDragEnd(lead, e)}
+              draggable
+            />
+          );
+        })}
+        {polygonPoints.length > 0 && (
+          <Polygon
+            coordinates={polygonPoints}
+            strokeColor="#000"
+            fillColor="rgba(0, 200, 0, 0.5)"
+            strokeWidth={2}
+          />
+        )}
+      </MapView>
+    ),
+    [
+      initialRegion,
+      clusteredPoints,
+      polygonPoints,
+      locationPermission,
+      isSatellite,
+      isDrawing,
+      supercluster
+    ]
+  );
+
+  return (
+    <View className="flex-1 w-full h-full">
+      {memoizedMap}
+      {renderStatusMenu()}
+      {renderNoteModal()}
+      {renderFullNotesModal()}
+
+      {/* Hamburger Menu */}
+      <View className="absolute top-10 left-4 z-10">
+        <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
+          <View className="w-6 h-5 justify-between">
+            <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+            <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+            <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+          </View>
+        </TouchableOpacity>
+      </View>
+
+      {/* Settings Modal */}
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isSettingsModalVisible}
+        onRequestClose={() => setIsSettingsModalVisible(false)}
+        statusBarTranslucent={false}
+      >
+        <StatusBar barStyle="light-content" backgroundColor="#121212" />
+        <View className="flex-1 bg-gray-900 px-6 py-8">
+          <View className="flex-row justify-between items-center mb-6">
+            <Text className="text-xl font-semibold text-white">Settings</Text>
+            <TouchableOpacity onPress={() => setIsSettingsModalVisible(false)}>
+              <Text className="text-xl font-semibold text-white">✕</Text>
+            </TouchableOpacity>
+          </View>
+
+          <View className="space-y-6">
+            {/* Satellite View */}
+            <View className="flex-row items-center justify-between p-3 bg-gray-800 rounded-lg">
+              <Text className="text-md text-gray-200">Satellite View</Text>
+              <Switch
+                value={isSatellite}
+                onValueChange={(v) => setIsSatellite(v)}
+                thumbColor={isSatellite ? '#4ADE80' : '#f4f3f4'}
+                trackColor={{ false: '#767577', true: '#81b0ff' }}
+              />
+            </View>
+
+            {/* Credential Type */}
+            <View>
+              <View className="flex-row justify-around">
+                <TouchableOpacity
+                  className={`flex-1 mr-2 p-3 rounded-lg items-center ${
+                    credentialType === 'ASAP' ? 'bg-blue-600' : 'bg-gray-700'
+                  }`}
+                  onPress={() => setCredentialType('ASAP')}
+                >
+                  <Text
+                    className={`text-sm ${
+                      credentialType === 'ASAP'
+                        ? 'text-white font-semibold'
+                        : 'text-gray-300 font-medium'
+                    }`}
+                  >
+                    ASAP
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  className={`flex-1 ml-2 p-3 rounded-lg items-center ${
+                    credentialType === 'BASS' ? 'bg-blue-600' : 'bg-gray-700'
+                  }`}
+                  onPress={() => setCredentialType('BASS')}
+                >
+                  <Text
+                    className={`text-sm ${
+                      credentialType === 'BASS'
+                        ? 'text-white font-semibold'
+                        : 'text-gray-300 font-medium'
+                    }`}
+                  >
+                    BASS
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Credentials */}
+            <View>
+              <TouchableOpacity
+                className={`p-3 rounded-lg flex-row items-center justify-center ${
+                  showCredentialsRef.current ? 'bg-gray-700' : 'bg-blue-600'
+                }`}
+                onPress={toggleCredentialsInputs}
+              >
+                <Text className="text-white font-semibold text-center text-sm">
+                  {showCredentialsRef.current
+                    ? 'Hide Credentials'
+                    : `Securely Add ${credentialType} Credentials`}
+                </Text>
+              </TouchableOpacity>
+
+              {showCredentialsRef.current && (
+                <View className="mt-6 space-y-4">
+                  {credentialType === 'ASAP' && (
+                    <>
+                      <TextInput
+                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                        placeholder="Enter ASAP Username"
+                        placeholderTextColor="#A1A1AA"
+                        onChangeText={(t) => (uasapRef.current = t)}
+                        autoCapitalize="none"
+                      />
+                      <TextInput
+                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                        placeholder="Enter ASAP Password"
+                        placeholderTextColor="#A1A1AA"
+                        secureTextEntry
+                        onChangeText={(t) => (pasapRef.current = t)}
+                        autoCapitalize="none"
+                      />
+                    </>
+                  )}
+                  {credentialType === 'BASS' && (
+                    <>
+                      <TextInput
+                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                        placeholder="Enter BASS Username"
+                        placeholderTextColor="#A1A1AA"
+                        onChangeText={(t) => (ubassRef.current = t)}
+                        autoCapitalize="none"
+                      />
+                      <TextInput
+                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                        placeholder="Enter BASS Password"
+                        placeholderTextColor="#A1A1AA"
+                        secureTextEntry
+                        onChangeText={(t) => (pbassRef.current = t)}
+                        autoCapitalize="none"
+                      />
+                    </>
+                  )}
+                  <TouchableOpacity
+                    className="bg-blue-500 p-3 rounded-lg shadow"
+                    onPress={saveCredentialsToDatabase}
+                  >
+                    <Text className="text-white font-semibold text-center text-sm">Save</Text>
+                  </TouchableOpacity>
+                  {saveMessage && (
+                    <Text className="text-green-400 text-center text-xs">{saveMessage}</Text>
+                  )}
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* Logout */}
+          <View className="absolute bottom-10 left-6">
+            <TouchableOpacity
+              className="bg-blue-600 p-3 rounded-lg shadow w-40 flex-row items-center justify-center"
+              onPress={handleLogout}
+            >
+              <Text className="text-white font-semibold text-center text-sm">Logout</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Crosshair */}
+      {!startSaleModal && (
+        <View className="absolute top-10 right-4 items-center">
+          <TouchableOpacity
+            className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
+            onPress={centerMapOnUserLocation}
+          >
+            <Image source={require('../../assets/images/crosshair.png')} className="w-7 h-7" />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Start Sale Modal */}
+      {startSaleModal && (
+        <Modal
+          animationType="slide"
+          transparent={false}
+          visible={startSaleModal}
+          onRequestClose={() => setStartSaleModal(false)}
+          statusBarTranslucent={false}
+        >
+          <StatusBar barStyle="light-content" backgroundColor="#121212" />
+          <View className="flex-1 bg-white">
+            <View className="flex-row justify-between items-center px-6 py-2 bg-gray-900">
+              <Text className="text-xl font-semibold text-white"></Text>
+              <TouchableOpacity
+                onPress={() => setStartSaleModal(false)}
+                accessibilityLabel="Close Start Sale"
+                accessible
+              >
+                <Text className="text-xl font-bold text-gray-200 pt-2">✕</Text>
+              </TouchableOpacity>
+            </View>
+            <WebView
+              ref={(r) => (this.webref = r)}
+              source={{
+                uri:
+                  credentialType === 'ASAP'
+                    ? 'https://asap.docxtract.com/Login.aspx'
+                    : 'https://bass.docxtract.com/Login.aspx',
+              }}
+              scalesPageToFit={false}
+              injectedJavaScript={`
+                const meta = document.createElement('meta'); 
+                meta.setAttribute('name', 'viewport'); 
+                meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=10, minimum-scale=0.1, user-scalable=yes');
+                document.getElementsByTagName('head')[0].appendChild(meta);
+              `}
+              style={{ flex: 1, backgroundColor: 'transparent' }}
+              onNavigationStateChange={(navState) => {
+                const url = navState.url;
+                console.log('Navigated to:', url);
+
+                if (url.includes('Login.aspx')) {
+                  console.log('we here');
+                } else if (url.includes('SimHomePage.aspx')) {
+                  injectNavigate();
+                } else if (url.includes('PrequalOrder.aspx')) {
+                  injectFill();
+                } else if (url.includes('PxCTLChooseService.aspx')) {
+                  injectFill2();
+                } else if (url.includes('PxCTLConfigureServicesDOB.aspx')) {
+                  injectDob();
+                } else if (url.includes('PxCTLConfigureServices.aspx')) {
+                  injectOptions();
+                } else if (url.includes('PxCTLCustomerInformation.aspx')) {
+                  injectEmail();
+                } else if (url.includes('PxCTLReviewandVerificationOrder.aspx')) {
+                  injectContinue();
+                } else {
+                  console.log('No script to inject for this URL.');
+                }
+              }}
+            />
+            <View className="flex-row justify-between px-6 py-4 bg-gray-900">
+              <TouchableOpacity
+                onPress={injectLogin}
+                className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
+              >
+                <Text className="text-white font-bold text-center">Login</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={injectConfirm}
+                className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
+              >
+                <Text className="text-white font-bold text-center">Confirm</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  if (this.webref) {
+                    this.webref.injectJavaScript('window.location.reload();');
+                  }
+                }}
+                className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
+              >
+                <Text className="text-white font-bold text-center">Refresh</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* Big Menu */}
+      {bigMenu && (
+        <Modal
+          animationType="slide"
+          transparent={false}
+          visible={bigMenu}
+          onRequestClose={closeBigMenu}
+          statusBarTranslucent={false}
+        >
+          <StatusBar barStyle="light-content" backgroundColor="#121212" />
+          <View className="flex-1 bg-gray-900 px-6 py-8">
+            <View className="flex-row justify-between items-center mb-6">
+              <Text className="text-xl font-semibold text-white">Lead Information</Text>
+              <TouchableOpacity onPress={closeBigMenu} accessibilityLabel="Close Menu" accessible>
+                <Text className="text-2xl font-bold text-gray-200">✕</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView className="flex-1">
+              <View className="space-y-4">
+                <TextInput
+                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                  placeholder="First Name"
+                  defaultValue={firstName.current}
+                  onChangeText={(t) => (firstName.current = t)}
+                  placeholderTextColor="#A1A1AA"
+                  autoCapitalize="words"
+                />
+                <TextInput
+                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                  placeholder="Last Name"
+                  defaultValue={lastName.current}
+                  onChangeText={(t) => (lastName.current = t)}
+                  placeholderTextColor="#A1A1AA"
+                  autoCapitalize="words"
+                />
+                <TextInput
+                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                  placeholder="Date of Birth (MM/DD/YYYY)"
+                  defaultValue={dob.current}
+                  onChangeText={(t) => (dob.current = t)}
+                  keyboardType="numeric"
+                  placeholderTextColor="#A1A1AA"
+                  maxLength={10}
+                />
+                <TextInput
+                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                  placeholder="Phone"
+                  defaultValue={phone.current}
+                  onChangeText={(t) => (phone.current = t)}
+                  keyboardType="phone-pad"
+                  placeholderTextColor="#A1A1AA"
+                />
+                <TextInput
+                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                  placeholder="Email"
+                  defaultValue={email.current}
+                  onChangeText={(t) => (email.current = t)}
+                  keyboardType="email-address"
+                  placeholderTextColor="#A1A1AA"
+                  autoCapitalize="none"
+                />
+              </View>
+            </ScrollView>
+            <TouchableOpacity
+              className="bg-blue-600 py-3 rounded-lg mt-6 items-center shadow"
+              onPress={startSale}
+              accessibilityLabel="Start Sale"
+              accessible
+            >
+              <Text className="text-white text-lg font-semibold">Start Sale</Text>
+            </TouchableOpacity>
+          </View>
+        </Modal>
+      )}
+    </View>
+  );
+}
+
+
+/app/(tabs)/works.jsx
+// // Import statements
+// import React, { useState, useEffect, useRef } from 'react';
+// import {
+//   View,
+//   Text,
+//   TouchableOpacity,
+//   Dimensions,
+//   TextInput,
+//   Modal,
+//   ScrollView,
+//   Image,
+//   Switch,
+//   Linking,
+//   Platform,
+//   ActivityIndicator,
+// } from 'react-native';
+// import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
+// import { useClusterer } from 'react-native-clusterer';
+// import * as Location from 'expo-location';
+// import { WebView } from 'react-native-webview';
+// import { useSupabase } from '../../contexts/SupabaseContext';
+// import 'react-native-url-polyfill/auto';
+
+// const { width, height } = Dimensions.get('window');
+// const MAP_DIMENSIONS = { width, height };
+// const BUFFER_FACTOR = 2;
+
+// export default function Tab() {
+//   const { supabase } = useSupabase();
+//   const [bigMenu, setBigMenu] = useState(false);
+//   const [leads, setLeads] = useState([]);
+//   const [initialRegion, setInitialRegion] = useState({
+//     latitude: 40.5853,
+//     longitude: -105.0844,
+//     latitudeDelta: 1,
+//     longitudeDelta: 1,
+//   });
+//   const mapRef = useRef(null);
+//   const [locationPermission, setLocationPermission] = useState(null);
+//   const [polygonPoints, setPolygonPoints] = useState([]);
+//   const [userLocation, setUserLocation] = useState(null);
+//   const [optimisticLocation, setOptimisticLocation] = useState(null);
+//   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+//   const [saveMessage, setSaveMessage] = useState('');
+//   const [region, setRegion] = useState(initialRegion);
+//   const [isClustering, setIsClustering] = useState(true);
+//   const [isSatellite, setIsSatellite] = useState(false);
+//   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+//   const [noteText, setNoteText] = useState('');
+//   const [recentNote, setRecentNote] = useState(null);
+//   const [leadAddress, setLeadAddress] = useState(null);
+//   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
+//   const [isFullNotesModalVisible, setIsFullNotesModalVisible] = useState(false);
+//   const [allNotes, setAllNotes] = useState([]);
+//   const [startSaleModal, setStartSaleModal] = useState(false);
+//   const selectedLead = useRef(null);
+//   const selectedPlan = useRef(null);
+//   const showCredentialsRef = useRef(false);
+//   const uasapRef = useRef('');
+//   const pasapRef = useRef('');
+//   const firstName = useRef('');
+//   const lastName = useRef('');
+//   const phone = useRef('');
+//   const email = useRef('');
+//   const dob = useRef('');
+//   const asapZip = useRef('');
+//   const asapAddress = useRef('');
+//   const asapCity = useRef('');
+//   const asapUasap = useRef('');
+//   const asapPasap = useRef('');
+//   const recentLead = useRef('');
+//   const noteInputRef = useRef(null);
+//   const [isDrawing, setIsDrawing] = useState(false);
+//   const [loading, setLoading] = useState(true); // Added loading state
+//   const [errorMessage, setErrorMessage] = useState(''); // Error message state
+
+//   useEffect(() => {
+//     (async () => {
+//       await fetchLeads();
+//       await requestLocationPermissionAndFetch();
+//       setLoading(false);
+//     })();
+
+//     return () => {
+//       saveMapState(region);
+//     };
+//   }, []);
+
+//   useEffect(() => {
+//     if (isNoteModalVisible && noteInputRef.current) {
+//       noteInputRef.current.focus();
+//     }
+//   }, [isNoteModalVisible]);
+
+//   async function fetchLeads() {
+//     try {
+//       const { data: userData, error: userError } = await supabase.auth.getUser();
+//       if (userError) throw userError;
+//       if (!userData?.user) return;
+
+//       const { data, error } = await supabase
+//         .from('restaurants')
+//         .select('id, location, status, knocks')
+//         .eq('user_id', userData.user.id);
+
+//       if (error) throw error;
+
+//       const formattedLeads = data.map((lead) => ({
+//         ...lead,
+//         latitude: lead.location.coordinates[1],
+//         longitude: lead.location.coordinates[0],
+//       }));
+//       setLeads(formattedLeads);
+//     } catch (error) {
+//       console.error('Error fetching leads:', error);
+//       setErrorMessage('Failed to fetch leads. Please try again.');
+//     }
+//   }
+
+//   async function requestLocationPermissionAndFetch() {
+//     try {
+//       const { status } = await Location.requestForegroundPermissionsAsync();
+//       setLocationPermission(status === 'granted');
+//       if (status !== 'granted') {
+//         console.error('Location permission not granted');
+//         return;
+//       }
+
+//       const lastKnownLocation = await Location.getLastKnownPositionAsync({});
+//       if (lastKnownLocation) {
+//         setOptimisticLocation({
+//           latitude: lastKnownLocation.coords.latitude,
+//           longitude: lastKnownLocation.coords.longitude,
+//         });
+//       }
+
+//       const location = await Location.getCurrentPositionAsync({
+//         accuracy: Location.Accuracy.Highest,
+//       });
+//       setUserLocation({
+//         latitude: location.coords.latitude,
+//         longitude: location.coords.longitude,
+//       });
+//     } catch (error) {
+//       console.error('Error fetching user location:', error);
+//       setErrorMessage('Failed to get user location. Please try again.');
+//     }
+//   }
+
+//   function toggleCredentialsInputs() {
+//     showCredentialsRef.current = !showCredentialsRef.current;
+//     // Force re-render
+//     setIsSettingsModalVisible((prev) => !prev);
+//     setIsSettingsModalVisible((prev) => !prev);
+//   }
+
+//   async function saveCredentialsToDatabase() {
+//     try {
+//       const { data: userData, error: userError } = await supabase.auth.getUser();
+//       if (userError) throw userError;
+//       if (!userData?.user) return;
+
+//       const { error } = await supabase
+//         .from('profiles')
+//         .update({ uasap: uasapRef.current, pasap: pasapRef.current })
+//         .eq('user_id', userData.user.id);
+
+//       if (error) throw error;
+
+//       setSaveMessage('Credentials saved successfully!');
+//       setTimeout(() => setSaveMessage(''), 3000);
+//     } catch (error) {
+//       console.error('Error saving credentials:', error);
+//       setErrorMessage('Failed to save credentials. Please try again.');
+//     }
+//   }
+
+//   async function handleLogout() {
+//     setIsSettingsModalVisible(false);
+//     setTimeout(async () => {
+//       try {
+//         const { error } = await supabase.auth.signOut();
+//         if (error) throw error;
+
+//         // Navigate to login or appropriate screen
+//         // navigation.replace('/(auth)/SelectOrganization');
+//       } catch (error) {
+//         console.error('Logout failed:', error);
+//         setErrorMessage('Failed to logout. Please try again.');
+//       }
+//     }, 300);
+//   }
+
+//   async function saveMapState(regionToSave) {
+//     // Implement map state saving logic if needed
+//   }
+
+//   function onRegionChangeComplete(newRegion) {
+//     setRegion(newRegion);
+//     saveMapState(newRegion);
+
+//     setIsClustering(newRegion.latitudeDelta >= 0.1);
+//   }
+
+//   function getPinColor(status) {
+//     switch (status) {
+//       case 0:
+//         return '#6A0DAD'; // New
+//       case 1:
+//         return '#FFD700'; // Gone
+//       case 2:
+//         return '#1E90FF'; // Later
+//       case 3:
+//         return '#FF6347'; // Nope
+//       case 4:
+//         return '#32CD32'; // Sold
+//       case 5:
+//         return '#00008B'; // Return
+//       default:
+//         return '#6A0DAD'; // Default color
+//     }
+//   }
+
+//   async function updateLeadStatus(leadId, newStatus) {
+//     try {
+//       setLeads((prevLeads) =>
+//         prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
+//       );
+
+//       const { error } = await supabase
+//         .from('restaurants')
+//         .update({ status: newStatus })
+//         .eq('id', leadId);
+
+//       if (error) throw error;
+//     } catch (error) {
+//       console.error('Error updating lead status:', error);
+//       setErrorMessage('Failed to update lead status. Please try again.');
+//       fetchLeads(); // Refresh leads in case of error
+//     }
+//   }
+
+//   async function fetchMostRecentNote(restaurantId) {
+//     try {
+//       const { data, error } = await supabase
+//         .from('notes')
+//         .select('note, created_at')
+//         .eq('restaurant_id', restaurantId)
+//         .order('created_at', { ascending: false })
+//         .limit(1);
+
+//       if (error) throw error;
+
+//       if (!data.length) {
+//         setRecentNote(null);
+//       } else {
+//         setRecentNote(data[0]);
+//       }
+//     } catch (error) {
+//       console.error('Error fetching recent note:', error);
+//       setErrorMessage('Failed to fetch recent note. Please try again.');
+//     }
+//   }
+
+//   async function fetchLeadAddress(restaurantId) {
+//     try {
+//       const { data, error } = await supabase
+//         .from('restaurants')
+//         .select('address, address2')
+//         .eq('id', restaurantId)
+//         .single();
+
+//       if (error) throw error;
+
+//       const fullAddress = `${data.address} ${data.address2 || ''}`;
+//       setLeadAddress(fullAddress.trim());
+//     } catch (error) {
+//       console.error('Error fetching address:', error);
+//       setErrorMessage('Failed to fetch lead address. Please try again.');
+//     }
+//   }
+
+//   function openMaps() {
+//     if (!selectedLead.current) return console.error('No lead selected.');
+
+//     const { latitude, longitude } = selectedLead.current;
+//     const url = Platform.select({
+//       ios: `http://maps.apple.com/?ll=${latitude},${longitude}`,
+//       android: `http://maps.google.com/?q=${latitude},${longitude}`,
+//     });
+
+//     Linking.openURL(url).catch((err) => console.error('Failed to open map:', err));
+//   }
+
+//   function showMenu(lead, event) {
+//     if (recentNote !== '') setRecentNote('');
+//     recentLead.current = lead;
+
+//     const { coordinate } = event.nativeEvent;
+//     mapRef.current.pointForCoordinate(coordinate).then((point) => {
+//       const x = point.x - width / 2;
+//       const y = point.y - height / 2;
+//       selectedLead.current = lead;
+//       fetchMostRecentNote(lead.id);
+//       fetchLeadAddress(lead.id);
+//       setMenuPosition({ x, y: y - 100 });
+//     });
+//   }
+
+//   function showBigMenu(lead) {
+//     selectedLead.current = lead;
+//     setBigMenu(true);
+//     handleDragStart(lead);
+//   }
+
+//   function closeBigMenu() {
+//     setBigMenu(false);
+//     selectedLead.current = null;
+//     firstName.current = '';
+//     lastName.current = '';
+//     phone.current = '';
+//     email.current = '';
+//     dob.current = '';
+//     // Force re-render
+//     setBigMenu((prev) => !prev);
+//     setBigMenu((prev) => !prev);
+//   }
+
+//   async function handleDragStart(lead) {
+//     recentLead.current = lead;
+//     setBigMenu(true);
+
+//     try {
+//       const { data, error } = await supabase
+//         .from('restaurants')
+//         .select('first_name, last_name, email, phone, dob')
+//         .eq('id', lead.id)
+//         .single();
+
+//       if (error) throw error;
+
+//       if (data) {
+//         firstName.current = data.first_name || '';
+//         lastName.current = data.last_name || '';
+//         phone.current = data.phone || '';
+//         email.current = data.email || '';
+//         dob.current = data.dob || '';
+//       }
+
+//       // Force re-render
+//       setBigMenu((prev) => !prev);
+//       setBigMenu((prev) => !prev);
+//     } catch (error) {
+//       console.error('Error querying Supabase:', error);
+//       setErrorMessage('Failed to fetch lead details. Please try again.');
+//     }
+//   }
+
+//   function handleDragEnd(lead, event) {
+//     // Handle drag end if needed
+//   }
+
+//   async function addNote() {
+//     const trimmedNote = noteText.trim();
+//     if (trimmedNote === '') return;
+
+//     setRecentNote({ note: trimmedNote, created_at: new Date().toISOString() });
+//     setNoteText('');
+//     setIsNoteModalVisible(false);
+
+//     try {
+//       const { data: userData, error: userError } = await supabase.auth.getUser();
+//       if (userError) throw userError;
+//       if (!userData?.user) return;
+
+//       const { error } = await supabase.from('notes').insert({
+//         restaurant_id: recentLead.current.id,
+//         note: trimmedNote,
+//         created_by: userData.user.id,
+//       });
+
+//       if (error) throw error;
+
+//       // Force re-render
+//       setIsNoteModalVisible((prev) => !prev);
+//       setIsNoteModalVisible((prev) => !prev);
+//     } catch (error) {
+//       console.error('Error adding note:', error);
+//       setErrorMessage('Failed to add note. Please try again.');
+//       setRecentNote(null);
+//     }
+//   }
+
+//   function formatDob(dob) {
+//     if (dob && dob.length === 8 && !dob.includes('/')) {
+//       return `${dob.slice(0, 2)}/${dob.slice(2, 4)}/${dob.slice(4, 8)}`;
+//     }
+//     return dob;
+//   }
+
+//   async function startSale() {
+//     setStartSaleModal(true);
+//     setBigMenu(false);
+
+//     if (!recentLead.current?.id) return console.error('No recent lead found.');
+
+//     try {
+//       const { data, error } = await supabase
+//         .from('restaurants')
+//         .select('address, zip5, city')
+//         .eq('id', recentLead.current.id)
+//         .single();
+
+//       if (error) throw error;
+
+//       const { data: userData, error: userError } = await supabase.auth.getUser();
+//       if (userError) throw userError;
+
+//       const { data: asaplogin, error: asapError } = await supabase
+//         .from('profiles')
+//         .select('uasap, pasap')
+//         .eq('user_id', userData.user.id)
+//         .single();
+
+//       if (asapError) throw asapError;
+
+//       asapPasap.current = asaplogin.pasap;
+//       asapUasap.current = asaplogin.uasap;
+//       asapAddress.current = data.address;
+//       asapZip.current = data.zip5;
+//       asapCity.current = data.city;
+
+//       const { error: insertError } = await supabase
+//         .from('restaurants')
+//         .update({
+//           first_name: firstName.current.trim(),
+//           last_name: lastName.current.trim(),
+//           email: email.current.trim(),
+//           phone: phone.current.trim(),
+//           dob: dob.current.trim(),
+//         })
+//         .eq('id', recentLead.current.id);
+
+//       if (insertError) throw insertError;
+//     } catch (error) {
+//       console.error('Error starting sale:', error);
+//       setErrorMessage('Failed to start sale. Please try again.');
+//     }
+//   }
+
+//   function centerMapOnUserLocation() {
+//     const locationToUse = userLocation || optimisticLocation;
+
+//     if (mapRef.current && locationToUse && initialRegion) {
+//       mapRef.current.animateToRegion({
+//         latitude: locationToUse.latitude,
+//         longitude: locationToUse.longitude,
+//         latitudeDelta: initialRegion.latitudeDelta,
+//         longitudeDelta: initialRegion.longitudeDelta,
+//       });
+//     } else {
+//       console.error('User location not available');
+//     }
+//   }
+
+//   function getVisibleLeads() {
+//     if (!region) return [];
+//     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
+
+//     const bufferedLatDelta = latitudeDelta * BUFFER_FACTOR;
+//     const bufferedLngDelta = longitudeDelta * BUFFER_FACTOR;
+
+//     const minLat = latitude - bufferedLatDelta / 2;
+//     const maxLat = latitude + bufferedLatDelta / 2;
+//     const minLng = longitude - bufferedLngDelta / 2;
+//     const maxLng = longitude + bufferedLngDelta / 2;
+
+//     return leads.filter(
+//       (lead) =>
+//         lead.latitude >= minLat &&
+//         lead.latitude <= maxLat &&
+//         lead.longitude >= minLng &&
+//         lead.longitude <= maxLng
+//     );
+//   }
+
+//   const visibleLeads = getVisibleLeads();
+
+//   const geoJSONLeads = visibleLeads.map((lead) => ({
+//     type: 'Feature',
+//     geometry: {
+//       type: 'Point',
+//       coordinates: [lead.longitude, lead.latitude],
+//     },
+//     properties: {
+//       id: lead.id,
+//       status: lead.status,
+//       knocks: lead.knocks || 0,
+//       latitude: lead.latitude,
+//       longitude: lead.longitude,
+//     },
+//   }));
+
+//   const [clusteredPoints, supercluster] = useClusterer(
+//     isClustering ? geoJSONLeads : [],
+//     MAP_DIMENSIONS,
+//     region,
+//     {
+//       minZoom: 0,
+//       maxZoom: 12,
+//       minPoints: 2,
+//       radius: 40,
+//     }
+//   );
+
+//   function renderStatusMenu() {
+//     if (!selectedLead.current) return null;
+
+//     const statuses = ['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'];
+//     const colors = ['#6A0DAD', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
+
+//     return (
+//       <View
+//         style={{
+//           position: 'absolute',
+//           left: menuPosition.x + width / 2 - 150,
+//           top: menuPosition.y + height / 2,
+//           backgroundColor: 'white',
+//           borderRadius: 5,
+//           padding: 6,
+//           shadowColor: '#000',
+//           shadowOpacity: 0.1,
+//           shadowRadius: 5,
+//           shadowOffset: { width: 0, height: 2 },
+//           width: 300,
+//         }}
+//       >
+//         {recentNote && (
+//           <View style={{ marginBottom: 10 }}>
+//             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+//               <Text style={{ fontSize: 12, color: '#333' }}>Recent Note: {recentNote.note}</Text>
+//               <TouchableOpacity onPress={() => showFullNotesModal(selectedLead.current.id)}>
+//                 <Text style={{ color: '#1E90FF', marginLeft: 4, fontSize: 18, fontWeight: 'bold' }}>→</Text>
+//               </TouchableOpacity>
+//             </View>
+//           </View>
+//         )}
+//         <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
+//           {statuses.map((status, index) => (
+//             <TouchableOpacity
+//               key={index}
+//               style={{ padding: 10, alignItems: 'center' }}
+//               onPress={() => {
+//                 updateLeadStatus(selectedLead.current.id, index);
+//                 selectedLead.current = null;
+//                 setMenuPosition({ x: 0, y: 0 });
+//               }}
+//             >
+//               <View style={{ backgroundColor: colors[index], height: 2, width: '100%', marginBottom: 2 }} />
+//               <Text style={{ fontSize: 12, textAlign: 'center', marginTop: 2 }}>{status}</Text>
+//             </TouchableOpacity>
+//           ))}
+//           <TouchableOpacity
+//             style={{
+//               backgroundColor: '#1E90FF',
+//               borderRadius: 9999,
+//               paddingVertical: 8,
+//               paddingHorizontal: 12,
+//               shadowColor: '#000',
+//               shadowOpacity: 0.2,
+//               shadowRadius: 3,
+//               shadowOffset: { width: 0, height: 1 },
+//               marginTop: 0,
+//               position: 'absolute',
+//               right: 0,
+//               top: -30,
+//             }}
+//             onPress={() => setIsNoteModalVisible(true)}
+//           >
+//             <Text style={{ color: 'white', fontSize: 14, fontWeight: 'bold' }}>+Note</Text>
+//           </TouchableOpacity>
+//         </View>
+//       </View>
+//     );
+//   }
+
+//   // Include renderNoteModal, renderFullNotesModal, and other rendering functions here
+//   function renderNoteModal() {
+//     // Implement your note modal here
+//   }
+
+//   function renderFullNotesModal() {
+//     // Implement your full notes modal here
+//   }
+
+//   function renderSettingsModal() {
+//     // Implement your settings modal here
+//   }
+
+//   function renderStartSaleModal() {
+//     // Implement your start sale modal here
+//   }
+
+//   if (loading) {
+//     return (
+//       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+//         <ActivityIndicator size="large" color="#1E90FF" />
+//       </View>
+//     );
+//   }
+
+//   return (
+//     <View style={{ flex: 1, width: '100%', height: '100%' }}>
+//       <MapView
+//         ref={mapRef}
+//         provider={PROVIDER_GOOGLE}
+//         initialRegion={initialRegion}
+//         onRegionChangeComplete={onRegionChangeComplete}
+//         style={{ flex: 1 }}
+//         onPress={(e) => {
+//           if (isDrawing) {
+//             const newPoint = e.nativeEvent.coordinate;
+//             setPolygonPoints([...polygonPoints, newPoint]);
+//           } else {
+//             selectedLead.current = null;
+//             // Force re-render
+//             setMenuPosition({ x: 0, y: 0 });
+//             setMenuPosition({ x: 0, y: 0 });
+//           }
+//         }}
+//         moveOnMarkerPress={false}
+//         showsUserLocation={locationPermission}
+//         scrollEnabled={!isDrawing}
+//         mapType={isSatellite ? 'satellite' : 'standard'}
+//       >
+//         {isClustering
+//           ? clusteredPoints.map((point) => {
+//               if (point.properties.cluster) {
+//                 const { cluster_id, point_count } = point.properties;
+//                 const coordinate = {
+//                   latitude: point.geometry.coordinates[1],
+//                   longitude: point.geometry.coordinates[0],
+//                 };
+
+//                 return (
+//                   <Marker
+//                     key={`cluster-${cluster_id}`}
+//                     coordinate={coordinate}
+//                     onPress={() => {
+//                       const expansionZoom = supercluster.getClusterExpansionZoom(cluster_id);
+//                       const newRegion = {
+//                         latitude: coordinate.latitude,
+//                         longitude: coordinate.longitude,
+//                         latitudeDelta: Math.max(initialRegion.latitudeDelta / 2, 0.005),
+//                         longitudeDelta: Math.max(initialRegion.longitudeDelta / 2, 0.005),
+//                       };
+//                       mapRef.current.animateToRegion(newRegion, 500);
+//                     }}
+//                   >
+//                     <View
+//                       style={{
+//                         width: 40,
+//                         height: 40,
+//                         borderRadius: 20,
+//                         backgroundColor: 'rgba(0,122,255,0.6)',
+//                         justifyContent: 'center',
+//                         alignItems: 'center',
+//                       }}
+//                     >
+//                       <Text style={{ color: '#fff', fontWeight: 'bold' }}>{point_count}</Text>
+//                     </View>
+//                   </Marker>
+//                 );
+//               }
+
+//               const lead = point.properties;
+
+//               return (
+//                 <Marker
+//                   key={`${lead.id}-${lead.status}-${lead.knocks}`} // Include status and knocks in key
+//                   coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+//                   pinColor={getPinColor(lead.status)}
+//                   onPress={(event) => showMenu(lead, event)}
+//                   onLongPress={() => showBigMenu(lead)}
+//                   onDragStart={() => handleDragStart(lead)}
+//                   onDragEnd={(e) => handleDragEnd(lead, e)}
+//                   draggable={true}
+//                 />
+//               );
+//             })
+//           : visibleLeads.map((lead) => (
+//               <Marker
+//                 key={`${lead.id}-${lead.status}-${lead.knocks}`} // Include status and knocks in key
+//                 coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+//                 pinColor={getPinColor(lead.status)}
+//                 onPress={(event) => showMenu(lead, event)}
+//                 onLongPress={() => showBigMenu(lead)}
+//                 onDragStart={() => handleDragStart(lead)}
+//                 onDragEnd={(e) => handleDragEnd(lead, e)}
+//                 draggable={true}
+//               />
+//             ))}
+//         {polygonPoints.length > 0 && (
+//           <Polygon
+//             coordinates={polygonPoints}
+//             strokeColor="#000"
+//             fillColor="rgba(0, 200, 0, 0.5)"
+//             strokeWidth={2}
+//           />
+//         )}
+//       </MapView>
+//       {renderStatusMenu()}
+//       {renderNoteModal()}
+//       {renderFullNotesModal()}
+//       {renderSettingsModal()}
+//       {renderStartSaleModal()}
+//       {/* Include other components and modals as in your original code */}
+//       {/* Error Message */}
+//       {errorMessage ? (
+//         <View
+//           style={{
+//             position: 'absolute',
+//             top: 50,
+//             left: 0,
+//             right: 0,
+//             alignItems: 'center',
+//             backgroundColor: 'rgba(255,0,0,0.7)',
+//             padding: 10,
+//           }}
+//         >
+//           <Text style={{ color: 'white', fontWeight: 'bold' }}>{errorMessage}</Text>
+//         </View>
+//       ) : null}
+//     </View>
+//   );
+// }
+
+
+/app/(tabs)/_layout.jsx
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import { Tabs, router } from 'expo-router';
+import { useEffect, useState } from 'react';
+import { View, ActivityIndicator } from 'react-native';
+import { useSupabase } from '../../contexts/SupabaseContext';
+
+export default function TabLayout() {
+  const { supabase, loading } = useSupabase();
+  const [sessionChecked, setSessionChecked] = useState(false);
+
+  useEffect(() => {
+    // Ensure Supabase client is initialized
+    if (loading) return;
+
+    // If supabase client is missing, redirect to organization selection
+    if (!supabase) {
+      router.replace("/(auth)/SelectOrganization");
+      return;
+    }
+
+    // Check and rehydrate the session on initial load
+    const checkSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        router.replace("/(auth)/SelectOrganization");
+      }
+      setSessionChecked(true); // Mark session as checked
+    };
+
+    checkSession();
+
+    // Set up listener for auth state changes (e.g., logout)
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!session) {
+        router.replace("/(auth)/SelectOrganization");
+      } else {
+        setSessionChecked(true); // Session active
+      }
+    });
+
+    return () => {
+      authListener.subscription?.unsubscribe();
+    };
+  }, [supabase, loading]);
+
+  // Show loading indicator until session is verified
+  if (loading || !sessionChecked) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#1c1c1c' }}>
+        <ActivityIndicator size="large" color="#ffffff" />
+      </View>
+    );
+  }
+
+  return (
+    <Tabs
+      screenOptions={{
+        tabBarStyle: { display: 'none' },
+        tabBarActiveTintColor: 'blue',
+        headerShown: false,
+      }}
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Map',
+          tabBarIcon: ({ color }) => <FontAwesome size={28} name="home" color={color} />,
+        }}
+      />
+    </Tabs>
+  );
+}
+
+
+/app/_layout.jsx
+import { Stack } from 'expo-router';
+import { SupabaseProvider } from '../contexts/SupabaseContext';
+
+export default function Layout() {
+  return (
+    <SupabaseProvider>
+      <Stack screenOptions={{
+        headerShown: false
+      }}>
+      </Stack>
+    </SupabaseProvider>
+  );
+}
