@@ -1,23 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Alert, View, TextInput, Text, TouchableOpacity, ActivityIndicator, Image } from 'react-native';
 import { useSupabase } from '../../contexts/SupabaseContext';
 import { router } from 'expo-router';
 
 export default function Login() {
-  const { supabase, organization } = useSupabase();
+  const { supabase } = useSupabase();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!organization) {
-      router.replace('/(auth)/SelectOrganization');
-    }
-  }, [organization]);
-
   async function signInWithEmail() {
     if (!supabase) {
-      Alert.alert("No organization selected", "Please select an organization first.");
+      Alert.alert("Error", "Supabase client not initialized.");
       return;
     }
 

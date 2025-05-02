@@ -12,9 +12,9 @@ export default function TabLayout() {
     // Ensure Supabase client is initialized
     if (loading) return;
 
-    // If supabase client is missing, redirect to organization selection
+    // If supabase client is missing, redirect to login
     if (!supabase) {
-      router.replace("/(auth)/SelectOrganization");
+      router.replace("/(auth)/login");
       return;
     }
 
@@ -22,7 +22,7 @@ export default function TabLayout() {
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        router.replace("/(auth)/SelectOrganization");
+        router.replace("/(auth)/login");
       }
       setSessionChecked(true); // Mark session as checked
     };
@@ -32,7 +32,7 @@ export default function TabLayout() {
     // Set up listener for auth state changes (e.g., logout)
     const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
-        router.replace("/(auth)/SelectOrganization");
+        router.replace("/(auth)/login");
       } else {
         setSessionChecked(true); // Session active
       }

@@ -1,4 +1,3 @@
-// /app/(tabs)/index.jsx
 import {
   Image,
   View,
@@ -6,12 +5,13 @@ import {
   TouchableOpacity,
   Dimensions,
   TextInput,
-  Modal,  // Modal imported for new filtering modal
+  Modal,
   ScrollView,
   Switch,
   Linking,
   Platform,
-  StatusBar
+  StatusBar,
+  ActivityIndicator
 } from 'react-native';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
@@ -22,30 +22,22 @@ import { useSupabase } from '../../contexts/SupabaseContext';
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Helper to chunk arrays so we don't send too-large .in() requests
-function chunkArray(arr, size) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
+const CREDENTIAL_TYPE_KEY = 'CREDENTIAL_TYPE'; 
 
-const CREDENTIAL_TYPE_KEY = 'CREDENTIAL_TYPE';
+
 const { width, height } = Dimensions.get('window');
 const MAP_DIMENSIONS = { width, height };
 const BUFFER_FACTOR = 2;
 
 export default function Tab() {
   const { supabase } = useSupabase();
-  const [credentialType, setCredentialType] = useState('ASAP'); // <<== NEW: Added credentialType state
   const [bigMenu, setBigMenu] = useState(false);
   const [leads, setLeads] = useState([]);
   const [initialRegion, setInitialRegion] = useState({
     latitude: 40.5853,
     longitude: -105.0844,
-    latitudeDelta: 1,
-    longitudeDelta: 1,
+    latitudeDelta: 0.1,
+    longitudeDelta: 0.1,
   });
   const mapRef = useRef(null);
   const [locationPermission, setLocationPermission] = useState(null);
@@ -55,14 +47,7 @@ export default function Tab() {
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const [saveMessage, setSaveMessage] = useState('');
   const [region, setRegion] = useState(initialRegion);
-  
-  // NEW: State variables for territory drawing and filtering on mobile
-  const [isDrawing, setIsDrawing] = useState(false); // Toggle drawing mode for creating territories
-  const [showFilterModal, setShowFilterModal] = useState(false); // Control visibility of filter modal
-
-  // Always clustering to avoid 5k direct markers:
-  const [isClustering] = useState(true);
-
+  const [isClustering, setIsClustering] = useState(true);
   const [isSatellite, setIsSatellite] = useState(false);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
@@ -73,6 +58,7 @@ export default function Tab() {
   const [allNotes, setAllNotes] = useState([]);
   const [startSaleModal, setStartSaleModal] = useState(false);
   const [dummyRender, setDummyRender] = useState(false);
+  const [isMapReady, setIsMapReady] = useState(false);
   const selectedLead = useRef(null);
   const selectedPlan = useRef(null);
   const showCredentialsRef = useRef(false);
@@ -92,26 +78,39 @@ export default function Tab() {
   const asapPasap = useRef('');
   const recentLead = useRef('');
   const noteInputRef = useRef(null);
+  const [isDrawing, setIsDrawing] = useState(false);
+  const [credentialType, setCredentialType] = useState('ASAP');
 
-  // Load credential type, fetch leads, get location
+  // normal stuff + fetch credential type
   useEffect(() => {
     const loadCredentialType = async () => {
       try {
         const storedType = await AsyncStorage.getItem(CREDENTIAL_TYPE_KEY);
-        if (storedType) setCredentialType(storedType);
+        if (storedType) {
+          setCredentialType(storedType);
+        }
       } catch (error) {
         console.error('Failed to load credential type:', error);
       }
     };
+
     loadCredentialType();
     fetchLeads();
     requestLocationPermissionAndFetch();
 
     return () => {
-      saveMapState(region);
+      if (region) {
+        saveMapState(region);
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Center map on user location once available and map is ready
+  useEffect(() => {
+    if ((userLocation || optimisticLocation) && isMapReady && mapRef.current) {
+      centerMapOnUserLocation();
+    }
+  }, [userLocation, optimisticLocation, isMapReady]);
 
   useEffect(() => {
     const saveCredentialType = async () => {
@@ -121,8 +120,10 @@ export default function Tab() {
         console.error('Failed to save credential type:', error);
       }
     };
+
     saveCredentialType();
   }, [credentialType]);
+
 
   useEffect(() => {
     if (isNoteModalVisible && noteInputRef.current) {
@@ -130,69 +131,23 @@ export default function Tab() {
     }
   }, [isNoteModalVisible]);
 
-  /**
-   * Fetch leads in two steps and unify with chunked "in" query:
-   *   1) .eq('user_id', userId)
-   *   2) .eq('manager_id', userId) in restaurants_managers => get restaurant_id
-   * Then unify those IDs in a single set, chunk if large, final .in().
-   */
   async function fetchLeads() {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData?.user) return;
-    const userId = userData.user.id;
 
-    try {
-      // 1) Direct leads
-      const { data: directAssigned, error: e1 } = await supabase
-        .from('restaurants')
-        .select('id, location, status, knocks')
-        .eq('user_id', userId);
-      if (e1) return console.error('Error fetching direct leads:', e1);
+    const { data, error } = await supabase
+      .from('leads')
+      .select('id, location, status, knocks')
+      .eq('user_id', userData.user.id);
 
-      // 2) Manager leads
-      const { data: managerAssigned, error: e2 } = await supabase
-        .from('restaurants_managers')
-        .select('restaurant_id')
-        .eq('manager_id', userId);
-      if (e2) return console.error('Error fetching manager leads:', e2);
+    if (error) return console.error('Error fetching leads:', error);
 
-      // Combine
-      const combinedIds = new Set([
-        ...(directAssigned || []).map((r) => r.id),
-        ...(managerAssigned || []).map((rm) => rm.restaurant_id),
-      ]);
-      if (!combinedIds.size) {
-        setLeads([]);
-        return;
-      }
-
-      // 3) Final fetch with chunked in() calls
-      let finalLeads = [];
-      const allIds = Array.from(combinedIds);
-      const chunks = chunkArray(allIds, 200);
-
-      for (const c of chunks) {
-        const { data, error } = await supabase
-          .from('restaurants')
-          .select('id, location, status, knocks')
-          .in('id', c);
-
-        if (error) {
-          console.error('Error fetching chunk of leads:', error);
-          continue;
-        }
-        finalLeads = finalLeads.concat(data);
-      }
-
-      const formatted = finalLeads.map((lead) => ({
-        ...lead,
-        latitude: lead.location?.coordinates?.[1],
-        longitude: lead.location?.coordinates?.[0],
-      }));
-      setLeads(formatted);
-    } catch (err) {
-      console.error('Unexpected error fetching leads:', err);
-    }
+    const formattedLeads = data.map((lead) => ({
+      ...lead,
+      latitude: lead.location.coordinates[1],
+      longitude: lead.location.coordinates[0],
+    }));
+    setLeads(formattedLeads); // Make sure setLeads triggers re-render
   }
 
   async function requestLocationPermissionAndFetch() {
@@ -203,21 +158,25 @@ export default function Tab() {
       return;
     }
 
-    const lastKnownLocation = await Location.getLastKnownPositionAsync({});
-    if (lastKnownLocation) {
-      setOptimisticLocation({
-        latitude: lastKnownLocation.coords.latitude,
-        longitude: lastKnownLocation.coords.longitude,
-      });
-    }
+    try {
+      const lastKnownLocation = await Location.getLastKnownPositionAsync({});
+      if (lastKnownLocation) {
+        setOptimisticLocation({
+          latitude: lastKnownLocation.coords.latitude,
+          longitude: lastKnownLocation.coords.longitude,
+        });
+      }
 
-    const location = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Highest,
-    });
-    setUserLocation({
-      latitude: location.coords.latitude,
-      longitude: location.coords.longitude,
-    });
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest,
+      });
+      setUserLocation({
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+      });
+    } catch (error) {
+      console.error('Error getting location:', error);
+    }
   }
 
   function toggleCredentialsInputs() {
@@ -232,7 +191,7 @@ export default function Tab() {
     let updateData = {};
     if (credentialType === 'ASAP') {
       updateData = { uasap: uasapRef.current, pasap: pasapRef.current };
-    } else {
+    } else if (credentialType === 'BASS') {
       updateData = { ubass: ubassRef.current, pbass: pbassRef.current };
     }
 
@@ -254,19 +213,23 @@ export default function Tab() {
       if (error) return console.error('Logout failed:', error);
 
       const { data: sessionData } = await supabase.auth.getSession();
-      if (!sessionData?.session) navigation.replace('/(auth)/SelectOrganization');
-      else navigation.navigate('Auth');
+      if (!sessionData?.session) {
+        navigation.replace('/(auth)/login');
+      } else {
+        navigation.navigate('Auth');
+      }
     }, 300);
   }
 
   async function saveMapState(regionToSave) {
-    // For saving map state if needed
+    // Implement map state saving logic if needed
   }
 
   function onRegionChangeComplete(newRegion) {
-    // We keep cluster always on, just store region
     setRegion(newRegion);
     saveMapState(newRegion);
+
+    setIsClustering(newRegion.latitudeDelta >= 0.1);
   }
 
   function getPinColor(status) {
@@ -278,58 +241,89 @@ export default function Tab() {
       4: '#32CD32', // Sold
       5: '#00008B', // Return
     };
-    return statusColors[status] || '#6A0DAD';
+    return statusColors[status] || '#6A0DAD'; // Default color
   }
 
   async function updateLeadStatus(leadId, newStatus) {
+    // Optimistic state update for immediate visual feedback
     setLeads((prevLeads) =>
       prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
     );
+
     try {
       const { error } = await supabase
-        .from('restaurants')
+        .from('leads')
         .update({ status: newStatus })
         .eq('id', leadId);
 
       if (error) {
         console.error('Error updating lead status:', error);
+        // Revert state change on error
         fetchLeads();
       }
-    } catch (err) {
-      console.error('Unexpected error updating lead status:', err);
+    } catch (error) {
+      console.error('Unexpected error updating lead status:', error);
+      // Fallback fetch if something goes wrong
       fetchLeads();
     }
   }
 
-  async function fetchMostRecentNote(restaurantId) {
+  async function fetchMostRecentNote(leadId) {
     const { data, error } = await supabase
       .from('notes')
       .select('note, created_at')
-      .eq('restaurant_id', restaurantId)
+      .eq('lead_id', leadId)
       .order('created_at', { ascending: false })
       .limit(1);
+
     if (error || !data.length) return setRecentNote(null);
+
     setRecentNote(data[0]);
   }
 
-  async function fetchLeadAddress(restaurantId) {
+  function showFullNotesModal(leadId) {
+    fetchAllNotes(leadId);
+    setIsFullNotesModalVisible(true);
+  }
+
+  async function fetchAllNotes(leadId) {
     const { data, error } = await supabase
-      .from('restaurants')
+      .from('notes')
+      .select('note, created_at')
+      .eq('lead_id', leadId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Error fetching all notes:', error);
+      setAllNotes([]);
+    } else {
+      setAllNotes(data);
+    }
+  }
+
+
+  async function fetchLeadAddress(leadId) {
+    const { data, error } = await supabase
+      .from('leads')
       .select('address, address2')
-      .eq('id', restaurantId)
+      .eq('id', leadId)
       .single();
+
     if (error) return console.error('Error fetching address:', error);
+
     const fullAddress = `${data.address} ${data.address2 || ''}`;
     setLeadAddress(fullAddress.trim());
   }
 
   function openMaps() {
     if (!selectedLead.current) return console.error('No lead selected.');
+
     const { latitude, longitude } = selectedLead.current;
     const url = Platform.select({
       ios: `http://maps.apple.com/?ll=${latitude},${longitude}`,
       android: `http://maps.google.com/?q=${latitude},${longitude}`,
     });
+
     Linking.openURL(url).catch((err) => console.error('Failed to open map:', err));
   }
 
@@ -366,12 +360,14 @@ export default function Tab() {
   async function handleDragStart(lead) {
     recentLead.current = lead;
     setBigMenu(true);
+
     try {
       const { data, error } = await supabase
-        .from('restaurants')
+        .from('leads')
         .select('first_name, last_name, email, phone, dob')
         .eq('id', lead.id)
         .single();
+
       if (error) return console.error('Error fetching lead data:', error);
 
       if (data) {
@@ -381,19 +377,21 @@ export default function Tab() {
         email.current = data.email || '';
         dob.current = data.dob || '';
       }
+
       setDummyRender((prev) => !prev);
-    } catch (err) {
-      console.error('Error querying Supabase:', err);
+    } catch (error) {
+      console.error('Error querying Supabase:', error);
     }
   }
 
   function handleDragEnd(lead, event) {
-    // If needed
+    // Handle drag end if needed
   }
 
   async function addNote() {
     const trimmedNote = noteText.trim();
-    if (!trimmedNote) return;
+    if (trimmedNote === '') return;
+
     setRecentNote({ note: trimmedNote, created_at: new Date().toISOString() });
     setNoteText('');
     setIsNoteModalVisible(false);
@@ -402,10 +400,11 @@ export default function Tab() {
     if (!userData?.user) return;
 
     const { error } = await supabase.from('notes').insert({
-      restaurant_id: recentLead.current.id,
+      lead_id: recentLead.current.id,
       note: trimmedNote,
       created_by: userData.user.id,
     });
+
     if (error) {
       console.error('Error adding note:', error);
       setRecentNote(null);
@@ -413,37 +412,40 @@ export default function Tab() {
     setDummyRender((prev) => !prev);
   }
 
-  function formatDob(d) {
-    if (d && d.length === 8 && !d.includes('/')) {
-      return `${d.slice(0, 2)}/${d.slice(2, 4)}/${d.slice(4, 8)}`;
+  function formatDob(dob) {
+    if (dob && dob.length === 8 && !dob.includes('/')) {
+      return `${dob.slice(0, 2)}/${dob.slice(2, 4)}/${dob.slice(4, 8)}`;
     }
-    return d;
+    return dob;
   }
 
   async function startSale() {
     setStartSaleModal(true);
     setBigMenu(false);
+
     if (!recentLead.current?.id) return console.error('No recent lead found.');
 
     const { data, error } = await supabase
-      .from('restaurants')
+      .from('leads')
       .select('address, zip5, city')
       .eq('id', recentLead.current.id)
       .single();
-    if (error) return console.error('Error fetching lead info:', error);
+
+    if (error) return console.error('Error fetching lead information:', error);
 
     const { data: userData } = await supabase.auth.getUser();
     const { data: asaplogin, error: asapError } = await supabase
       .from('profiles')
-      .select('uasap, pasap, ubass, pbass')
+      .select('uasap, pasap, ubass, pbass') // Fetch both ASAP and BASS credentials
       .eq('user_id', userData.user.id)
       .single();
+
     if (asapError) return console.error('Error fetching login info:', asapError);
 
     if (credentialType === 'ASAP') {
       asapPasap.current = asaplogin.pasap;
       asapUasap.current = asaplogin.uasap;
-    } else {
+    } else if (credentialType === 'BASS') {
       asapPasap.current = asaplogin.pbass;
       asapUasap.current = asaplogin.ubass;
     }
@@ -453,7 +455,7 @@ export default function Tab() {
     asapCity.current = data.city;
 
     const { error: insertError } = await supabase
-      .from('restaurants')
+      .from('leads')
       .update({
         first_name: firstName.current.trim(),
         last_name: lastName.current.trim(),
@@ -462,14 +464,17 @@ export default function Tab() {
         dob: dob.current.trim(),
       })
       .eq('id', recentLead.current.id);
-    if (insertError) console.error('Error inserting lead info:', insertError);
+
+    if (insertError) console.error('Error inserting lead information:', insertError);
   }
 
   function injectLogin() {
     setTimeout(() => {
+      const username = credentialType === 'ASAP' ? asapUasap.current : asapUasap.current;
+      const password = credentialType === 'ASAP' ? asapPasap.current : asapPasap.current;
       const script = `
-        document.querySelector('input[name="loginForm$UserName"]').value = "${asapUasap.current}";
-        document.querySelector('input[name="loginForm$Password"]').value = "${asapPasap.current}";
+        document.querySelector('input[name="loginForm$UserName"]').value = "${username}";
+        document.querySelector('input[name="loginForm$Password"]').value = "${password}";
         document.querySelector('input[name="loginForm$LoginButton"]').click();
       `;
       this.webref.injectJavaScript(script);
@@ -513,180 +518,240 @@ export default function Tab() {
 
   function injectFill2() {
     const script = `
-      const waitForElement = (sel, t=5000) => {
-        return new Promise((res, rej) => {
-          const i=100; const e=Date.now()+t;
-          const c=setInterval(()=>{
-            const el=document.querySelector(sel);
-            if(el){clearInterval(c);res(el);}
-            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
-          },i);
+      const waitForElement = (selector, timeout = 5000) => {
+        return new Promise((resolve, reject) => {
+          const interval = 100;
+          const endTime = Date.now() + timeout;
+          const checkInterval = setInterval(() => {
+            const element = document.querySelector(selector);
+            if (element) {
+              clearInterval(checkInterval);
+              resolve(element);
+            } else if (Date.now() > endTime) {
+              clearInterval(checkInterval);
+              reject(new Error('Element not found: ' + selector));
+            }
+          }, interval);
         });
       };
-      waitForElement('input[value="radioBroadbandFactsCompleted"]')
-        .then(radio=>{
-          radio.click();
-          setTimeout(()=>{
-            waitForElement('input[value="Continue"]')
-              .then(btn=>btn.click())
-              .catch(e=>console.error('No continue btn:',e));
-          },200);
-        })
-        .catch(e=>console.error('No broadbandFacts radio:',e));
+  
+      waitForElement('input[value="radioBroadbandFactsCompleted"]').then(broadbandFactsRadio => {
+        broadbandFactsRadio.click();
+        setTimeout(() => {
+          waitForElement('input[value="Continue"]').then(continueButton => {
+            continueButton.click();
+          }).catch(error => {
+            console.error('Error finding continue button:', error);
+          });
+        }, 200);
+      }).catch(error => {
+        console.error('Error finding broadband facts radio:', error);
+      });
     `;
     this.webref.injectJavaScript(script);
   }
+  
 
   function injectDob() {
-    const f = formatDob(dob.current);
+    const formattedDob = formatDob(dob.current);
     const script = `
-      const waitForElement=(sel,t=5000)=>{
-        return new Promise((res,rej)=>{
-          const i=100; const e=Date.now()+t;
-          const c=setInterval(()=>{
-            const el=document.querySelector(sel);
-            if(el){clearInterval(c);res(el);}
-            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
-          },i);
+      const waitForElement = (selector, timeout = 5000) => {
+        return new Promise((resolve, reject) => {
+          const interval = 100;
+          const endTime = Date.now() + timeout;
+          const checkInterval = setInterval(() => {
+            const element = document.querySelector(selector);
+            if (element) {
+              clearInterval(checkInterval);
+              resolve(element);
+            } else if (Date.now() > endTime) {
+              clearInterval(checkInterval);
+              reject(new Error('Element not found: ' + selector));
+            }
+          }, interval);
         });
       };
-      waitForElement('input[id="ctl00_ContentPlaceHolder1_RadDOB_dateInput"]')
-        .then(dobInput=>{
-          dobInput.value='${f}';
-          dobInput.dispatchEvent(new Event('change',{bubbles:true}));
-          dobInput.focus();
-          setTimeout(()=>{
-            dobInput.blur();
-            const out=document.querySelector('div.row-l-c');
-            if(out){
-              out.click();
-              const cont=document.querySelector('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]');
-              if(cont) setTimeout(()=>cont.click(),200);
+  
+      waitForElement('input[id="ctl00_ContentPlaceHolder1_RadDOB_dateInput"]').then(dobInput => {
+        dobInput.value = '${formattedDob}';
+        dobInput.dispatchEvent(new Event('change', { bubbles: true }));
+        dobInput.focus();
+        setTimeout(() => {
+          dobInput.blur();
+          const outsideDiv = document.querySelector('div.row-l-c');
+          if (outsideDiv) {
+            outsideDiv.click();
+            const continueButton = document.querySelector('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]');
+            if (continueButton) {
+              setTimeout(() => {
+                continueButton.click();
+              }, 200);
             }
-          },100);
-        })
-        .catch(e=>console.error('DOB injection fail:',e));
+          }
+        }, 100);
+      }).catch(error => {
+        console.error('Error injecting DOB:', error);
+      });
     `;
     this.webref.injectJavaScript(script);
   }
+  
 
   function injectOptions() {
     const script = `
-      const waitForElement=(sel,t=5000)=>{
-        return new Promise((res,rej)=>{
-          const i=100; const e=Date.now()+t;
-          const c=setInterval(()=>{
-            const el=document.querySelector(sel);
-            if(el){clearInterval(c);res(el);}
-            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
-          },i);
+      const waitForElement = (selector, timeout = 5000) => {
+        return new Promise((resolve, reject) => {
+          const interval = 100;
+          const endTime = Date.now() + timeout;
+          const checkInterval = setInterval(() => {
+            const element = document.querySelector(selector);
+            if (element) {
+              clearInterval(checkInterval);
+              resolve(element);
+            } else if (Date.now() > endTime) {
+              clearInterval(checkInterval);
+              reject(new Error('Element not found: ' + selector));
+            }
+          }, interval);
         });
       };
-      waitForElement('input[value="PX_QTM_WIFI_FREE"]')
-        .then(wifi=>{
-          wifi.click();
-          setTimeout(()=>{
-            waitForElement('input[value="PX_QTM_SVC_TECHINST_FREE"]')
-              .then(tech=>{
-                tech.click();
-                waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]')
-                  .then(btn=> setTimeout(()=>btn.click(),200))
-                  .catch(e=>console.error('No continue btn:',e));
-              })
-              .catch(e=>console.error('No tech install:',e));
-          },100);
-        })
-        .catch(e=>console.error('No Wi-Fi:',e));
+  
+      waitForElement('input[value="PX_QTM_WIFI_FREE"]').then(selectWifiOption => {
+        selectWifiOption.click();
+        setTimeout(() => {
+          waitForElement('input[value="PX_QTM_SVC_TECHINST_FREE"]').then(selectTechInstallOption => {
+            selectTechInstallOption.click();
+            waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]').then(continueButton => {
+              setTimeout(() => {
+                continueButton.click();
+              }, 200);
+            }).catch(error => {
+              console.error('Error finding continue button:', error);
+            });
+          }).catch(error => {
+            console.error('Error finding tech install option:', error);
+          });
+        }, 100);
+      }).catch(error => {
+        console.error('Error finding Wi-Fi option:', error);
+      });
     `;
     this.webref.injectJavaScript(script);
   }
+  
 
   function injectEmail() {
     const script = `
-      const waitForElement=(sel,t=5000)=>{
-        return new Promise((res,rej)=>{
-          const i=100; const e=Date.now()+t;
-          const c=setInterval(()=>{
-            const el=document.querySelector(sel);
-            if(el){clearInterval(c);res(el);}
-            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
-          },i);
+      const waitForElement = (selector, timeout = 5000) => {
+        return new Promise((resolve, reject) => {
+          const interval = 100;
+          const endTime = Date.now() + timeout;
+          const checkInterval = setInterval(() => {
+            const element = document.querySelector(selector);
+            if (element) {
+              clearInterval(checkInterval);
+              resolve(element);
+            } else if (Date.now() > endTime) {
+              clearInterval(checkInterval);
+              reject(new Error('Element not found: ' + selector));
+            }
+          }, interval);
         });
       };
-      waitForElement('input[name="ctl00$ContentPlaceHolder1$txtContactEmail"]')
-        .then(emailInput=>{
-          emailInput.value='${email.current}';
-          emailInput.dispatchEvent(new Event('change',{bubbles:true}));
-          waitForElement('input[value="radioSMSCapableYes"]')
-            .then(smsYes=>{
-              smsYes.click();
-              setTimeout(()=>{
-                waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]')
-                  .then(btn=>btn.click())
-                  .catch(e=>console.error('No continue btn:',e));
-              },200);
-            })
-            .catch(e=>console.error('No SMSCapableYes:',e));
-        })
-        .catch(e=>console.error('No email input:',e));
+  
+      waitForElement('input[name="ctl00$ContentPlaceHolder1$txtContactEmail"]').then(emailInput => {
+        emailInput.value = '${email.current}';
+        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+        waitForElement('input[value="radioSMSCapableYes"]').then(smsCapableYesRadio => {
+          smsCapableYesRadio.click();
+          setTimeout(() => {
+            waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]').then(continueButton => {
+              continueButton.click();
+            }).catch(error => {
+              console.error('Error finding continue button:', error);
+            });
+          }, 200);
+        }).catch(error => {
+          console.error('Error finding SMS capable option:', error);
+        });
+      }).catch(error => {
+        console.error('Error finding email input:', error);
+      });
     `;
     this.webref.injectJavaScript(script);
   }
+  
 
   function injectContinue() {
     const script = `
-      const waitForElement=(sel,t=5000)=>{
-        return new Promise((res,rej)=>{
-          const i=100; const e=Date.now()+t;
-          const c=setInterval(()=>{
-            const el=document.querySelector(sel);
-            if(el){clearInterval(c);res(el);}
-            else if(Date.now()>e){clearInterval(c);rej('Timeout: '+sel);}
-          },i);
+      const waitForElement = (selector, timeout = 5000) => {
+        return new Promise((resolve, reject) => {
+          const interval = 100;
+          const endTime = Date.now() + timeout;
+          const checkInterval = setInterval(() => {
+            const element = document.querySelector(selector);
+            if (element) {
+              clearInterval(checkInterval);
+              resolve(element);
+            } else if (Date.now() > endTime) {
+              clearInterval(checkInterval);
+              reject(new Error('Element not found: ' + selector));
+            }
+          }, interval);
         });
       };
-      waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]')
-        .then(btn=>btn.click())
-        .catch(e=>console.error('No continue btn:',e));
+  
+      waitForElement('input[name="ctl00$ContentPlaceHolder1$ibtnContinue"]').then(continueButton => {
+        continueButton.click();
+      }).catch(error => {
+        console.error('Error finding continue button:', error);
+      });
     `;
     this.webref.injectJavaScript(script);
   }
+  
 
   function injectConfirm() {
     const script = `
-      const yes=document.querySelector('input[value="radioAddressValidationYes"]');
-      if(yes){
-        yes.click();
-        const c=document.querySelector('input[name="ctl00$ContentPlaceHolder1$btnAddressValidationOK"]');
-        if(c) c.click();
+      const addressValidationYes = document.querySelector('input[value="radioAddressValidationYes"]');
+      if (addressValidationYes) {
+        addressValidationYes.click();
+        const confirmButton = document.querySelector('input[name="ctl00$ContentPlaceHolder1$btnAddressValidationOK"]');
+        if (confirmButton) {
+          confirmButton.click();
+        }
       }
     `;
     this.webref.injectJavaScript(script);
   }
 
   function centerMapOnUserLocation() {
-    const loc = userLocation || optimisticLocation;
-    if (mapRef.current && loc && region) {
+    const locationToUse = userLocation || optimisticLocation;
+
+    if (mapRef.current && locationToUse) {
       mapRef.current.animateToRegion({
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        latitudeDelta: region.latitudeDelta,
-        longitudeDelta: region.longitudeDelta,
-      });
+        latitude: locationToUse.latitude,
+        longitude: locationToUse.longitude,
+        latitudeDelta: 0.05, // Use a closer zoom when centering on user
+        longitudeDelta: 0.05,
+      }, 1000); // Add duration for smoother animation
     } else {
-      console.error('User location not available');
+      console.error('User location or map not available');
     }
   }
 
   function getVisibleLeads() {
     if (!region) return [];
     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
-    const buffLat = latitudeDelta * BUFFER_FACTOR;
-    const buffLng = longitudeDelta * BUFFER_FACTOR;
-    const minLat = latitude - buffLat / 2;
-    const maxLat = latitude + buffLat / 2;
-    const minLng = longitude - buffLng / 2;
-    const maxLng = longitude + buffLng / 2;
+
+    const bufferedLatDelta = latitudeDelta * BUFFER_FACTOR;
+    const bufferedLngDelta = longitudeDelta * BUFFER_FACTOR;
+
+    const minLat = latitude - bufferedLatDelta / 2;
+    const maxLat = latitude + bufferedLatDelta / 2;
+    const minLng = longitude - bufferedLngDelta / 2;
+    const maxLng = longitude + bufferedLngDelta / 2;
+
     return leads.filter(
       (lead) =>
         lead.latitude >= minLat &&
@@ -698,32 +763,38 @@ export default function Tab() {
 
   const visibleLeads = getVisibleLeads();
 
-  const geoJSONLeads = useMemo(
-    () =>
-      visibleLeads.map((lead) => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: [lead.longitude, lead.latitude] },
-        properties: {
-          id: lead.id,
-          status: lead.status,
-          knocks: lead.knocks || 0,
-          latitude: lead.latitude,
-          longitude: lead.longitude,
-        },
-      })),
-    [visibleLeads]
-  );
+  const geoJSONLeads = useMemo(() => {
+    return visibleLeads.map((lead) => ({
+      type: 'Feature',
+      geometry: {
+        type: 'Point',
+        coordinates: [lead.longitude, lead.latitude],
+      },
+      properties: {
+        id: lead.id,
+        status: lead.status,
+        knocks: lead.knocks || 0,
+        latitude: lead.latitude,
+        longitude: lead.longitude,
+      },
+    }));
+  }, [visibleLeads]);
 
-  // Force clustering for big datasets
   const [clusteredPoints, supercluster] = useClusterer(
     isClustering ? geoJSONLeads : [],
     MAP_DIMENSIONS,
     region,
-    { minZoom: 0, maxZoom: 12, minPoints: 2, radius: 40 }
+    {
+      minZoom: 0,
+      maxZoom: 12,
+      minPoints: 2,
+      radius: 40,
+    }
   );
 
   function renderStatusMenu() {
     if (!selectedLead.current) return null;
+
     const statuses = ['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'];
     const colors = ['#800080', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
 
@@ -834,25 +905,6 @@ export default function Tab() {
     );
   }
 
-  function showFullNotesModal(restaurantId) {
-    fetchAllNotes(restaurantId);
-    setIsFullNotesModalVisible(true);
-  }
-
-  async function fetchAllNotes(restaurantId) {
-    const { data, error } = await supabase
-      .from('notes')
-      .select('note, created_at')
-      .eq('restaurant_id', restaurantId)
-      .order('created_at', { ascending: false });
-    if (error) {
-      console.error('Error fetching all notes:', error);
-      setAllNotes([]);
-    } else {
-      setAllNotes(data);
-    }
-  }
-
   function renderFullNotesModal() {
     return (
       <Modal
@@ -884,8 +936,6 @@ export default function Tab() {
     );
   }
 
-  // NEW: Territory Mode and Filter buttons added below the Crosshair button
-
   const memoizedMap = useMemo(
     () => (
       <MapView
@@ -907,52 +957,67 @@ export default function Tab() {
         showsUserLocation={locationPermission}
         scrollEnabled={!isDrawing}
         mapType={isSatellite ? 'satellite' : 'standard'}
-        showsMyLocationButton={false}
+        showsMyLocationButton={false} // Add this line to hide the default location button on Android
+        onMapReady={() => setIsMapReady(true)}
       >
-        {clusteredPoints.map((point) => {
-          if (point.properties.cluster) {
-            const { cluster_id, point_count } = point.properties;
-            const coordinate = {
-              latitude: point.geometry.coordinates[1],
-              longitude: point.geometry.coordinates[0],
-            };
-            return (
+        {isClustering
+          ? clusteredPoints.map((point) => {
+              if (point.properties.cluster) {
+                const { cluster_id, point_count } = point.properties;
+                const coordinate = {
+                  latitude: point.geometry.coordinates[1],
+                  longitude: point.geometry.coordinates[0],
+                };
+
+                return (
+                  <Marker
+                    key={`cluster-${cluster_id}`}
+                    coordinate={coordinate}
+                    onPress={() => {
+                      const expansionZoom = supercluster.getClusterExpansionZoom(cluster_id);
+                      const newRegion = {
+                        latitude: coordinate.latitude,
+                        longitude: coordinate.longitude,
+                        latitudeDelta: Math.max(initialRegion.latitudeDelta / 2, 0.005),
+                        longitudeDelta: Math.max(initialRegion.longitudeDelta / 2, 0.005),
+                      };
+                      mapRef.current.animateToRegion(newRegion, 500);
+                    }}
+                  >
+                    <View className="w-10 h-10 rounded-full bg-blue-500 justify-center items-center">
+                      <Text className="text-white font-bold">{point_count}</Text>
+                    </View>
+                  </Marker>
+                );
+              }
+
+              const lead = point.properties;
+
+              return (
+                <Marker
+                  key={`${lead.id}-${lead.status}`} // Include status in the key
+                  coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+                  pinColor={getPinColor(lead.status)}
+                  onPress={(event) => showMenu(lead, event)}
+                  onLongPress={() => showBigMenu(lead)}
+                  onDragStart={() => handleDragStart(lead)}
+                  onDragEnd={(e) => handleDragEnd(lead, e)}
+                  draggable={true}
+                />
+              );
+            })
+          : visibleLeads.map((lead) => (
               <Marker
-                key={`cluster-${cluster_id}`}
-                coordinate={coordinate}
-                tracksViewChanges={false}
-                onPress={() => {
-                  const zoom = supercluster.getClusterExpansionZoom(cluster_id);
-                  const newRegion = {
-                    latitude: coordinate.latitude,
-                    longitude: coordinate.longitude,
-                    latitudeDelta: Math.max(initialRegion.latitudeDelta / 2, 0.005),
-                    longitudeDelta: Math.max(initialRegion.longitudeDelta / 2, 0.005),
-                  };
-                  mapRef.current.animateToRegion(newRegion, 500);
-                }}
-              >
-                <View className="w-10 h-10 rounded-full bg-blue-500 justify-center items-center">
-                  <Text className="text-white font-bold">{point_count}</Text>
-                </View>
-              </Marker>
-            );
-          }
-          const lead = point.properties;
-          return (
-            <Marker
-              key={`${lead.id}-${lead.status}`}
-              coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-              pinColor={getPinColor(lead.status)}
-              tracksViewChanges={false}
-              onPress={(event) => showMenu(lead, event)}
-              onLongPress={() => showBigMenu(lead)}
-              onDragStart={() => handleDragStart(lead)}
-              onDragEnd={(e) => handleDragEnd(lead, e)}
-              draggable
-            />
-          );
-        })}
+                key={`${lead.id}-${lead.status}`}
+                coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+                pinColor={getPinColor(lead.status)}
+                onPress={(event) => showMenu(lead, event)}
+                onLongPress={() => showBigMenu(lead)}
+                onDragStart={() => handleDragStart(lead)}
+                onDragEnd={(e) => handleDragEnd(lead, e)}
+                draggable={true}
+              />
+            ))}
         {polygonPoints.length > 0 && (
           <Polygon
             coordinates={polygonPoints}
@@ -968,9 +1033,9 @@ export default function Tab() {
       clusteredPoints,
       polygonPoints,
       locationPermission,
+      isClustering,
+      visibleLeads,
       isSatellite,
-      isDrawing,
-      supercluster
     ]
   );
 
@@ -980,7 +1045,6 @@ export default function Tab() {
       {renderStatusMenu()}
       {renderNoteModal()}
       {renderFullNotesModal()}
-
       {/* Hamburger Menu */}
       <View className="absolute top-10 left-4 z-10">
         <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
@@ -991,379 +1055,360 @@ export default function Tab() {
           </View>
         </TouchableOpacity>
       </View>
-
-      {/* Crosshair Button */}
-      {!startSaleModal && (
-        <View className="absolute top-10 right-4 items-center">
-          <TouchableOpacity
-            className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
-            onPress={centerMapOnUserLocation}
-          >
-            <Image source={require('../../assets/images/crosshair.png')} className="w-7 h-7" />
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Territory Mode Button */}
-      {!startSaleModal && (
-        <View className="absolute top-20 right-4 items-center">
-          <TouchableOpacity
-            className={`bg-indigo-600 p-2 rounded-full ${isDrawing ? 'opacity-100' : 'opacity-80'}`}
-            onPress={() => setIsDrawing(!isDrawing)}
-          >
-            <Text className="text-white text-xs">Territory Mode</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Filter Button */}
-      {!startSaleModal && (
-        <View className="absolute top-32 right-4 items-center">
-          <TouchableOpacity
-            className="bg-green-600 p-2 rounded-full"
-            onPress={() => setShowFilterModal(true)}
-          >
-            <Text className="text-white text-xs">Filter</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
       {/* Settings Modal */}
       <Modal
-        animationType="slide"
-        transparent={false}
-        visible={isSettingsModalVisible}
-        onRequestClose={() => setIsSettingsModalVisible(false)}
-        statusBarTranslucent={false}
-      >
-        <StatusBar barStyle="light-content" backgroundColor="#121212" />
-        <View className="flex-1 bg-gray-900 px-6 py-8">
-          <View className="flex-row justify-between items-center mb-6">
-            <Text className="text-xl font-semibold text-white">Settings</Text>
-            <TouchableOpacity onPress={() => setIsSettingsModalVisible(false)}>
-              <Text className="text-xl font-semibold text-white">✕</Text>
-            </TouchableOpacity>
+      animationType="slide"
+      transparent={false}
+      visible={isSettingsModalVisible}
+      onRequestClose={() => setIsSettingsModalVisible(false)}
+      statusBarTranslucent={false} // Ensures the modal covers the status bar
+    >
+      {/* Status Bar Styling */}
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor="#121212" // Dark background for the status bar
+      />
+
+      <View className="flex-1 bg-gray-900 px-6 py-8">
+        {/* Header */}
+        <View className="flex-row justify-between items-center mb-6">
+          <Text className="text-xl font-semibold text-white">Settings</Text>
+          <TouchableOpacity onPress={() => setIsSettingsModalVisible(false)}>
+            <Text className="text-xl font-semibold text-white">✕</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Settings Content */}
+        <View className="space-y-6">
+          {/* Satellite View Toggle */}
+          <View className="flex-row items-center justify-between p-3 bg-gray-800 rounded-lg">
+            <Text className="text-md text-gray-200">Satellite View</Text>
+            <Switch
+              value={isSatellite}
+              onValueChange={(value) => setIsSatellite(value)}
+              thumbColor={isSatellite ? '#4ADE80' : '#f4f3f4'}
+              trackColor={{ false: '#767577', true: '#81b0ff' }}
+            />
           </View>
 
-          <View className="space-y-6">
-            {/* Satellite View */}
-            <View className="flex-row items-center justify-between p-3 bg-gray-800 rounded-lg">
-              <Text className="text-md text-gray-200">Satellite View</Text>
-              <Switch
-                value={isSatellite}
-                onValueChange={(v) => setIsSatellite(v)}
-                thumbColor={isSatellite ? '#4ADE80' : '#f4f3f4'}
-                trackColor={{ false: '#767577', true: '#81b0ff' }}
-              />
-            </View>
-
-            {/* Credential Type */}
-            <View>
-              <View className="flex-row justify-around">
-                <TouchableOpacity
-                  className={`flex-1 mr-2 p-3 rounded-lg items-center ${
-                    credentialType === 'ASAP' ? 'bg-blue-600' : 'bg-gray-700'
-                  }`}
-                  onPress={() => setCredentialType('ASAP')}
-                >
-                  <Text
-                    className={`text-sm ${
-                      credentialType === 'ASAP'
-                        ? 'text-white font-semibold'
-                        : 'text-gray-300 font-medium'
-                    }`}
-                  >
-                    ASAP
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  className={`flex-1 ml-2 p-3 rounded-lg items-center ${
-                    credentialType === 'BASS' ? 'bg-blue-600' : 'bg-gray-700'
-                  }`}
-                  onPress={() => setCredentialType('BASS')}
-                >
-                  <Text
-                    className={`text-sm ${
-                      credentialType === 'BASS'
-                        ? 'text-white font-semibold'
-                        : 'text-gray-300 font-medium'
-                    }`}
-                  >
-                    BASS
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Credentials */}
-            <View>
+          {/* Credential Type Selection */}
+          <View>
+            <View className="flex-row justify-around">
+              {/* ASAP Button */}
               <TouchableOpacity
-                className={`p-3 rounded-lg flex-row items-center justify-center ${
-                  showCredentialsRef.current ? 'bg-gray-700' : 'bg-blue-600'
+                className={`flex-1 mr-2 p-3 rounded-lg items-center ${
+                  credentialType === 'ASAP' ? 'bg-blue-600' : 'bg-gray-700'
                 }`}
-                onPress={toggleCredentialsInputs}
+                onPress={() => setCredentialType('ASAP')}
               >
-                <Text className="text-white font-semibold text-center text-sm">
-                  {showCredentialsRef.current
-                    ? 'Hide Credentials'
-                    : `Securely Add ${credentialType} Credentials`}
+                <Text
+                  className={`text-sm ${
+                    credentialType === 'ASAP' ? 'text-white font-semibold' : 'text-gray-300 font-medium'
+                  }`}
+                >
+                  ASAP
                 </Text>
               </TouchableOpacity>
 
-              {showCredentialsRef.current && (
-                <View className="mt-6 space-y-4">
-                  {credentialType === 'ASAP' && (
-                    <>
-                      <TextInput
-                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                        placeholder="Enter ASAP Username"
-                        placeholderTextColor="#A1A1AA"
-                        onChangeText={(t) => (uasapRef.current = t)}
-                        autoCapitalize="none"
-                      />
-                      <TextInput
-                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                        placeholder="Enter ASAP Password"
-                        placeholderTextColor="#A1A1AA"
-                        secureTextEntry
-                        onChangeText={(t) => (pasapRef.current = t)}
-                        autoCapitalize="none"
-                      />
-                    </>
-                  )}
-                  {credentialType === 'BASS' && (
-                    <>
-                      <TextInput
-                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                        placeholder="Enter BASS Username"
-                        placeholderTextColor="#A1A1AA"
-                        onChangeText={(t) => (ubassRef.current = t)}
-                        autoCapitalize="none"
-                      />
-                      <TextInput
-                        className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                        placeholder="Enter BASS Password"
-                        placeholderTextColor="#A1A1AA"
-                        secureTextEntry
-                        onChangeText={(t) => (pbassRef.current = t)}
-                        autoCapitalize="none"
-                      />
-                    </>
-                  )}
-                  <TouchableOpacity
-                    className="bg-blue-500 p-3 rounded-lg shadow"
-                    onPress={saveCredentialsToDatabase}
-                  >
-                    <Text className="text-white font-semibold text-center text-sm">Save</Text>
-                  </TouchableOpacity>
-                  {saveMessage && (
-                    <Text className="text-green-400 text-center text-xs">{saveMessage}</Text>
-                  )}
-                </View>
-              )}
+              {/* BASS Button */}
+              <TouchableOpacity
+                className={`flex-1 ml-2 p-3 rounded-lg items-center ${
+                  credentialType === 'BASS' ? 'bg-blue-600' : 'bg-gray-700'
+                }`}
+                onPress={() => setCredentialType('BASS')}
+              >
+                <Text
+                  className={`text-sm ${
+                    credentialType === 'BASS' ? 'text-white font-semibold' : 'text-gray-300 font-medium'
+                  }`}
+                >
+                  BASS
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
-          {/* Logout */}
-          <View className="absolute bottom-10 left-6">
+          {/* Credentials Section */}
+          <View>
             <TouchableOpacity
-              className="bg-blue-600 p-3 rounded-lg shadow w-40 flex-row items-center justify-center"
-              onPress={handleLogout}
+              className={`p-3 rounded-lg flex-row items-center justify-center ${
+                showCredentialsRef.current ? 'bg-gray-700' : 'bg-blue-600'
+              }`}
+              onPress={toggleCredentialsInputs}
             >
-              <Text className="text-white font-semibold text-center text-sm">Logout</Text>
+              <Text className="text-white font-semibold text-center text-sm">
+                {showCredentialsRef.current
+                  ? 'Hide Credentials'
+                  : `Securely Add ${credentialType} Credentials`}
+              </Text>
             </TouchableOpacity>
+
+            {showCredentialsRef.current && (
+              <View className="mt-6 space-y-4">
+                {credentialType === 'ASAP' && (
+                  <>
+                    <TextInput
+                      className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                      placeholder="Enter ASAP Username"
+                      placeholderTextColor="#A1A1AA"
+                      onChangeText={(text) => (uasapRef.current = text)}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                      placeholder="Enter ASAP Password"
+                      secureTextEntry
+                      placeholderTextColor="#A1A1AA"
+                      onChangeText={(text) => (pasapRef.current = text)}
+                      autoCapitalize="none"
+                    />
+                  </>
+                )}
+                {credentialType === 'BASS' && (
+                  <>
+                    <TextInput
+                      className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                      placeholder="Enter BASS Username"
+                      placeholderTextColor="#A1A1AA"
+                      onChangeText={(text) => (ubassRef.current = text)}
+                      autoCapitalize="none"
+                    />
+                    <TextInput
+                      className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                      placeholder="Enter BASS Password"
+                      secureTextEntry
+                      placeholderTextColor="#A1A1AA"
+                      onChangeText={(text) => (pbassRef.current = text)}
+                      autoCapitalize="none"
+                    />
+                  </>
+                )}
+                <TouchableOpacity
+                  className="bg-blue-500 p-3 rounded-lg shadow"
+                  onPress={saveCredentialsToDatabase}
+                >
+                  <Text className="text-white font-semibold text-center text-sm">
+                    Save
+                  </Text>
+                </TouchableOpacity>
+                {saveMessage && (
+                  <Text className="text-green-400 text-center text-xs">
+                    {saveMessage}
+                  </Text>
+                )}
+              </View>
+            )}
           </View>
         </View>
-      </Modal>
 
-      {/* Start Sale Modal */}
-      {startSaleModal && (
-        <Modal
-          animationType="slide"
-          transparent={false}
-          visible={startSaleModal}
-          onRequestClose={() => setStartSaleModal(false)}
-          statusBarTranslucent={false}
+        {/* Logout Button */}
+        <View className="absolute bottom-10 left-6">
+          <TouchableOpacity
+            className="bg-blue-600 p-3 rounded-lg shadow w-40 flex-row items-center justify-center"
+            onPress={handleLogout}
+          >
+            <Text className="text-white font-semibold text-center text-sm">
+              Logout
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+
+    {/* Crosshair */}
+    {!startSaleModal && (
+      <View className="absolute top-10 right-4 items-center">
+        <TouchableOpacity
+          className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
+          onPress={centerMapOnUserLocation}
         >
-          <StatusBar barStyle="light-content" backgroundColor="#121212" />
-          <View className="flex-1 bg-white">
-            <View className="flex-row justify-between items-center px-6 py-2 bg-gray-900">
-              <Text className="text-xl font-semibold text-white"></Text>
-              <TouchableOpacity
-                onPress={() => setStartSaleModal(false)}
-                accessibilityLabel="Close Start Sale"
-                accessible
-              >
-                <Text className="text-xl font-bold text-gray-200 pt-2">✕</Text>
-              </TouchableOpacity>
-            </View>
-            <WebView
-              ref={(r) => (this.webref = r)}
-              source={{
-                uri:
-                  credentialType === 'ASAP'
-                    ? 'https://asap.docxtract.com/Login.aspx'
-                    : 'https://bass.docxtract.com/Login.aspx',
-              }}
-              scalesPageToFit={false}
-              injectedJavaScript={`
-                const meta = document.createElement('meta'); 
-                meta.setAttribute('name', 'viewport'); 
-                meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=10, minimum-scale=0.1, user-scalable=yes');
-                document.getElementsByTagName('head')[0].appendChild(meta);
-              `}
-              style={{ flex: 1, backgroundColor: 'transparent' }}
-              onNavigationStateChange={(navState) => {
-                const url = navState.url;
-                console.log('Navigated to:', url);
+          <Image source={require('../../assets/images/crosshair.png')} className="w-7 h-7" />
+        </TouchableOpacity>
+      </View>
+    )}
+    {/* Start Sale Modal */}
+    {startSaleModal && (
+  <Modal
+    animationType="slide"
+    transparent={false}
+    visible={startSaleModal}
+    onRequestClose={() => setStartSaleModal(false)}
+    statusBarTranslucent={false}
+  >
+    {/* Status Bar Styling */}
+    <StatusBar
+      barStyle="light-content"
+      backgroundColor="#121212" // Dark background for the status bar
+    />
 
-                if (url.includes('Login.aspx')) {
-                  console.log('we here');
-                } else if (url.includes('SimHomePage.aspx')) {
-                  injectNavigate();
-                } else if (url.includes('PrequalOrder.aspx')) {
-                  injectFill();
-                } else if (url.includes('PxCTLChooseService.aspx')) {
-                  injectFill2();
-                } else if (url.includes('PxCTLConfigureServicesDOB.aspx')) {
-                  injectDob();
-                } else if (url.includes('PxCTLConfigureServices.aspx')) {
-                  injectOptions();
-                } else if (url.includes('PxCTLCustomerInformation.aspx')) {
-                  injectEmail();
-                } else if (url.includes('PxCTLReviewandVerificationOrder.aspx')) {
-                  injectContinue();
-                } else {
-                  console.log('No script to inject for this URL.');
-                }
-              }}
-            />
-            <View className="flex-row justify-between px-6 py-4 bg-gray-900">
-              <TouchableOpacity
-                onPress={injectLogin}
-                className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
-              >
-                <Text className="text-white font-bold text-center">Login</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={injectConfirm}
-                className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
-              >
-                <Text className="text-white font-bold text-center">Confirm</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  if (this.webref) {
-                    this.webref.injectJavaScript('window.location.reload();');
-                  }
-                }}
-                className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
-              >
-                <Text className="text-white font-bold text-center">Refresh</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-      )}
+    <View className="flex-1 bg-white">
+      {/* Header Bar */}
+      <View className="flex-row justify-between items-center px-6 py-2 bg-gray-900">
+        <Text className="text-xl font-semibold text-white"></Text>
+        <TouchableOpacity onPress={() => setStartSaleModal(false)} accessibilityLabel="Close Start Sale" accessible={true}>
+          <Text className="text-xl font-bold text-gray-200 pt-2">✕</Text>
+        </TouchableOpacity>
+      </View>
 
-      {/* Big Menu */}
-      {bigMenu && (
-        <Modal
-          animationType="slide"
-          transparent={false}
-          visible={bigMenu}
-          onRequestClose={closeBigMenu}
-          statusBarTranslucent={false}
+      {/* WebView */}
+      <WebView
+        ref={(r) => (this.webref = r)}
+        source={{
+          uri:
+            credentialType === 'ASAP'
+              ? 'https://asap.docxtract.com/Login.aspx'
+              : 'https://bass.docxtract.com/Login.aspx',
+        }}
+        scalesPageToFit={false} // Allows scaling (if supported in your version)
+        injectedJavaScript={`
+          const meta = document.createElement('meta'); 
+          meta.setAttribute('name', 'viewport'); 
+          meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=10, minimum-scale=0.1, user-scalable=yes');
+          document.getElementsByTagName('head')[0].appendChild(meta);
+        `}
+        style={{ flex: 1, backgroundColor: 'transparent' }}
+        onNavigationStateChange={(navState) => {
+          const currentUrl = navState.url;
+          console.log('Navigated to:', currentUrl);
+
+          if (currentUrl.includes('Login.aspx')) {
+            // injectLogin();
+            console.log("we here");
+          } else if (currentUrl.includes('SimHomePage.aspx')) {
+            injectNavigate();
+          } else if (currentUrl.includes('PrequalOrder.aspx')) {
+            injectFill();
+          } else if (currentUrl.includes('PxCTLChooseService.aspx')) {
+            injectFill2();
+          } else if (currentUrl.includes('PxCTLConfigureServicesDOB.aspx')) {
+            injectDob();
+          } else if (currentUrl.includes('PxCTLConfigureServices.aspx')) {
+            injectOptions();
+          } else if (currentUrl.includes('PxCTLCustomerInformation.aspx')) {
+            injectEmail();
+          } else if (currentUrl.includes('PxCTLReviewandVerificationOrder.aspx')) {
+            injectContinue();
+          } else {
+            console.log('No script to inject for this URL.');
+          }
+        }}
+      />
+
+      {/* Bottom Button Bar */}
+      <View className="flex-row justify-between px-6 py-4 bg-gray-900">
+        <TouchableOpacity
+          onPress={injectLogin}
+          className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
         >
-          <StatusBar barStyle="light-content" backgroundColor="#121212" />
-          <View className="flex-1 bg-gray-900 px-6 py-8">
-            <View className="flex-row justify-between items-center mb-6">
-              <Text className="text-xl font-semibold text-white">Lead Information</Text>
-              <TouchableOpacity onPress={closeBigMenu} accessibilityLabel="Close Menu" accessible>
-                <Text className="text-2xl font-bold text-gray-200">✕</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView className="flex-1">
-              <View className="space-y-4">
-                <TextInput
-                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                  placeholder="First Name"
-                  defaultValue={firstName.current}
-                  onChangeText={(t) => (firstName.current = t)}
-                  placeholderTextColor="#A1A1AA"
-                  autoCapitalize="words"
-                />
-                <TextInput
-                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                  placeholder="Last Name"
-                  defaultValue={lastName.current}
-                  onChangeText={(t) => (lastName.current = t)}
-                  placeholderTextColor="#A1A1AA"
-                  autoCapitalize="words"
-                />
-                <TextInput
-                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                  placeholder="Date of Birth (MM/DD/YYYY)"
-                  defaultValue={dob.current}
-                  onChangeText={(t) => (dob.current = t)}
-                  keyboardType="numeric"
-                  placeholderTextColor="#A1A1AA"
-                  maxLength={10}
-                />
-                <TextInput
-                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                  placeholder="Phone"
-                  defaultValue={phone.current}
-                  onChangeText={(t) => (phone.current = t)}
-                  keyboardType="phone-pad"
-                  placeholderTextColor="#A1A1AA"
-                />
-                <TextInput
-                  className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                  placeholder="Email"
-                  defaultValue={email.current}
-                  onChangeText={(t) => (email.current = t)}
-                  keyboardType="email-address"
-                  placeholderTextColor="#A1A1AA"
-                  autoCapitalize="none"
-                />
-              </View>
-            </ScrollView>
-            <TouchableOpacity
-              className="bg-blue-600 py-3 rounded-lg mt-6 items-center shadow"
-              onPress={startSale}
-              accessibilityLabel="Start Sale"
-              accessible
-            >
-              <Text className="text-white text-lg font-semibold">Start Sale</Text>
-            </TouchableOpacity>
-          </View>
-        </Modal>
-      )}
-
-      {/* Filter Modal */}
-      {showFilterModal && (
-        <Modal
-          animationType="slide"
-          transparent={true}
-          visible={showFilterModal}
-          onRequestClose={() => setShowFilterModal(false)}
+          <Text className="text-white font-bold text-center">Login</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={injectConfirm}
+          className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
         >
-          <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}>
-            <View style={{ width: '80%', backgroundColor: '#fff', borderRadius: 10, padding: 20 }}>
-              <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 10 }}>Filter Leads</Text>
-              {/* Insert your filter UI components here */}
-              <Text style={{ marginBottom: 10 }}>Filter UI goes here.</Text>
-              <TouchableOpacity
-                style={{ marginTop: 10, backgroundColor: '#007bff', padding: 10, borderRadius: 5 }}
-                onPress={() => setShowFilterModal(false)}
-              >
-                <Text style={{ color: '#fff', textAlign: 'center' }}>Apply Filters</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-      )}
+          <Text className="text-white font-bold text-center">Confirm</Text>
+        </TouchableOpacity>        
+        <TouchableOpacity
+          onPress={() => {
+            if (this.webref) {
+              this.webref.injectJavaScript('window.location.reload();');
+            }
+          }}
+          className="bg-blue-500 py-2.5 px-4 rounded flex-1 mx-1"
+        >
+          <Text className="text-white font-bold text-center">Refresh</Text>
+        </TouchableOpacity>
+      </View>
     </View>
-  );
+  </Modal>
+)}
+
+    {/* Big Menu */}
+    {bigMenu && (
+      <Modal
+            animationType="slide"
+            transparent={false}
+            visible={bigMenu}
+            onRequestClose={closeBigMenu}
+            statusBarTranslucent={false}
+          >
+            {/* Status Bar Styling */}
+            <StatusBar
+              barStyle="light-content"
+              backgroundColor="#121212" // Dark background for the status bar
+            />
+
+            <View className="flex-1 bg-gray-900 px-6 py-8">
+              {/* Header */}
+              <View className="flex-row justify-between items-center mb-6">
+                <Text className="text-xl font-semibold text-white">Lead Information</Text>
+                <TouchableOpacity onPress={closeBigMenu} accessibilityLabel="Close Menu" accessible={true}>
+                  <Text className="text-2xl font-bold text-gray-200">✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Input Fields */}
+              <ScrollView className="flex-1">
+                <View className="space-y-4">
+                  <TextInput
+                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                    placeholder="First Name"
+                    defaultValue={firstName.current}
+                    onChangeText={(text) => (firstName.current = text)}
+                    placeholderTextColor="#A1A1AA"
+                    autoCapitalize="words"
+                  />
+                  <TextInput
+                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                    placeholder="Last Name"
+                    defaultValue={lastName.current}
+                    onChangeText={(text) => (lastName.current = text)}
+                    placeholderTextColor="#A1A1AA"
+                    autoCapitalize="words"
+                  />
+                  <TextInput
+                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                    placeholder="Date of Birth (MM/DD/YYYY)"
+                    defaultValue={dob.current}
+                    onChangeText={(text) => (dob.current = text)}
+                    keyboardType="numeric"
+                    placeholderTextColor="#A1A1AA"
+                    maxLength={10}
+                  />
+                  <TextInput
+                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                    placeholder="Phone"
+                    defaultValue={phone.current}
+                    onChangeText={(text) => (phone.current = text)}
+                    keyboardType="phone-pad"
+                    placeholderTextColor="#A1A1AA"
+                  />
+                  <TextInput
+                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                    placeholder="Email"
+                    defaultValue={email.current}
+                    onChangeText={(text) => (email.current = text)}
+                    keyboardType="email-address"
+                    placeholderTextColor="#A1A1AA"
+                    autoCapitalize="none"
+                  />
+                </View>
+              </ScrollView>
+
+              {/* Start Sale Button */}
+              <TouchableOpacity
+                className="bg-blue-600 py-3 rounded-lg mt-6 items-center shadow"
+                onPress={startSale}
+                accessibilityLabel="Start Sale"
+                accessible={true}
+              >
+                <Text className="text-white text-lg font-semibold">Start Sale</Text>
+              </TouchableOpacity>
+            </View>
+          </Modal>
+      )}
+
+
+  </View>
+);
 }
