@@ -2,7 +2,7 @@
   "expo": {
     "name": "optic-mobile",
     "slug": "optic-mobile",
-    "version": "1.2.7",
+    "version": "1.3.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
@@ -14,18 +14,19 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "1.2.7",
+      "buildNumber": "1.3.0",
       "config": {
         "googleMapsApiKey": "AIzaSyCiJR22fxGkGoz7Ph8y9_0NcCRIbHBH2Fc"
       },
       "infoPlist": {
         "CADisableMinimumFrameDurationOnPhone": true,
-        "NSLocationWhenInUseUsageDescription": "We use your location to help you find nearby leads and optimize door-to-door visits. Your location is never shared outside the app."
+        "NSLocationWhenInUseUsageDescription": "We use your location to help you find nearby leads and optimize door-to-door visits. Your location is never shared outside the app.",
+        "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.opticd2d.optic"
     },
     "android": {
-      "versionCode": 16,
+      "versionCode": 20,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
