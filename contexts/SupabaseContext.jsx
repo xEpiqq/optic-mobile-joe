@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Single Supabase instance configuration
-const supabaseUrl = 'https://dcftyljfxsaauxtygbnz.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRjZnR5bGpmeHNhYXV4dHlnYm56Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDUzNTE1MTgsImV4cCI6MjA2MDkyNzUxOH0.FK6O3oI9nMNYJc19d7NBnWj73M1cYwXgJdA4glZCQSs';
+const supabaseUrl = 'https://qqmndmypoxijrkznqeww.supabase.co';
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFxbW5kbXlwb3hpanJrem5xZXd3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY0Nzc5OTEsImV4cCI6MjA2MjA1Mzk5MX0.q5wV1LIx8u0_YozitzLwYRHZVEoYCz1q3dO-DC3ajdg'
 
 const SupabaseContext = createContext();
 
