@@ -313,8 +313,9 @@ export default function Tab() {
         ...lead,
         latitude: lead.location.coordinates[1],
         longitude: lead.location.coordinates[0],
-        // Add a flag to differentiate team leads from user's own leads
-        isTeamLead: lead.user_id !== userData.user.id
+        // Only mark as team lead if in manager mode AND the lead belongs to someone else's territory
+        // For now, we'll determine this based on whether it was fetched from team territories vs user territories
+        isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
       }));
       
       setLeads(formattedLeads);
@@ -434,12 +435,12 @@ export default function Tab() {
   }
 
   async function updateLeadStatus(leadId, newStatus) {
-    // Get the lead to check if it's a team lead
+    // Get the lead to check if it's editable
     const lead = leads.find(l => l.id === leadId);
     
-    // Don't allow updating team leads
-    if (lead && lead.isTeamLead) {
-      console.log('Cannot update status of team leads');
+    // Only block editing if it's a team lead in manager mode (leads from other territories)
+    if (lead && lead.isTeamLead && isManager && managerModeEnabled) {
+      console.log('Cannot update status of team leads from other territories');
       return;
     }
     
@@ -541,8 +542,8 @@ export default function Tab() {
   }
 
   function showBigMenu(lead) {
-    // Don't allow opening big menu for team leads
-    if (lead.isTeamLead) {
+    // Only block big menu for team leads in manager mode (leads from other territories)
+    if (lead.isTeamLead && isManager && managerModeEnabled) {
       return;
     }
     
@@ -1008,7 +1009,7 @@ export default function Tab() {
             {leadAddress && (
               <View className="absolute bottom-0 right-0 z-50 p-2.5 px-3 bg-white rounded flex-row items-center">
                 <Text className="text-black font-bold text-base flex-1">{leadAddress}</Text>
-                {selectedLead.current.isTeamLead && (
+                {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
                   <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-2">
                     <Text className="text-white text-xs font-semibold">Team Lead</Text>
                   </View>
@@ -1057,26 +1058,26 @@ export default function Tab() {
                 selectedLead.current = null;
                 setMenuPosition({ x: 0, y: 0 });
               }}
-              disabled={selectedLead.current.isTeamLead}
+              disabled={selectedLead.current.isTeamLead && isManager && managerModeEnabled}
             >
               <View 
                 style={{ 
                   backgroundColor: colors[index],
-                  opacity: selectedLead.current.isTeamLead ? 0.5 : 1
+                  opacity: selectedLead.current.isTeamLead && isManager && managerModeEnabled ? 0.5 : 1
                 }} 
                 className="h-0.5 w-full mb-0.5" 
               />
               <Text 
-                className={`text-xs text-center mt-0.5 ${selectedLead.current.isTeamLead ? 'text-gray-400' : 'text-black'}`}
+                className={`text-xs text-center mt-0.5 ${selectedLead.current.isTeamLead && isManager && managerModeEnabled ? 'text-gray-400' : 'text-black'}`}
               >
                 {status}
               </Text>
             </TouchableOpacity>
           ))}
           <TouchableOpacity
-            className={`${selectedLead.current.isTeamLead ? 'bg-gray-400' : 'bg-blue-500'} rounded-full py-2 px-3 shadow mt-0 absolute right-0 top-16`}
+            className={`${selectedLead.current.isTeamLead && isManager && managerModeEnabled ? 'bg-gray-400' : 'bg-blue-500'} rounded-full py-2 px-3 shadow mt-0 absolute right-0 top-16`}
             onPress={() => setIsNoteModalVisible(true)}
-            disabled={selectedLead.current.isTeamLead}
+            disabled={selectedLead.current.isTeamLead && isManager && managerModeEnabled}
           >
             <Text className="text-white text-sm font-bold">+Note</Text>
           </TouchableOpacity>
@@ -1754,7 +1755,7 @@ export default function Tab() {
         alert(`Territory "${territoryName}" updated successfully!\n${selectedUsers.length} users assigned\n${leadsInPolygon.length} leads assigned`);
       } else {
         // Create new territory (existing code)
-        console.log('Creating territory...');
+      console.log('Creating territory...');
         
         // Get user's team/organization info for new territories
         const { data: profile, error: profileError } = await supabase
@@ -1768,81 +1769,81 @@ export default function Tab() {
           alert('Failed to fetch user profile');
           return;
         }
-
-        // Step 1: Insert territory into territories table
-        const { data: territoryData, error: territoryError } = await supabase
-          .from('territories')
-          .insert([{
-            name: territoryName,
-            color: territoryColor,
+      
+      // Step 1: Insert territory into territories table
+      const { data: territoryData, error: territoryError } = await supabase
+        .from('territories')
+        .insert([{
+          name: territoryName,
+          color: territoryColor,
             geom: geoJsonPolygon,
             organization: profile.organization
-          }])
-          .select()
-          .single();
+        }])
+        .select()
+        .single();
 
-        if (territoryError) {
-          console.error('Error creating territory:', territoryError);
-          alert('Failed to create territory: ' + territoryError.message);
-          return;
+      if (territoryError) {
+        console.error('Error creating territory:', territoryError);
+        alert('Failed to create territory: ' + territoryError.message);
+        return;
+      }
+
+      const territoryId = territoryData.id;
+      console.log('Territory created with ID:', territoryId);
+
+      // Step 2: Create user-territory relationships
+      if (selectedUsers.length > 0) {
+        const userJoinEntries = selectedUsers.map(userId => ({
+          uid: userId,
+          territory_id: territoryId,
+          created_at: new Date()
+        }));
+
+        const { error: userJoinError } = await supabase
+          .from('users_join_territories')
+          .insert(userJoinEntries);
+
+        if (userJoinError) {
+          console.error('Error linking users to territory:', userJoinError);
+          alert('Territory created but failed to assign users: ' + userJoinError.message);
+        } else {
+          console.log('Successfully linked users to territory');
         }
-
-        const territoryId = territoryData.id;
-        console.log('Territory created with ID:', territoryId);
-
-        // Step 2: Create user-territory relationships
-        if (selectedUsers.length > 0) {
-          const userJoinEntries = selectedUsers.map(userId => ({
-            uid: userId,
-            territory_id: territoryId,
-            created_at: new Date()
-          }));
-
-          const { error: userJoinError } = await supabase
-            .from('users_join_territories')
-            .insert(userJoinEntries);
-
-          if (userJoinError) {
-            console.error('Error linking users to territory:', userJoinError);
-            alert('Territory created but failed to assign users: ' + userJoinError.message);
-          } else {
-            console.log('Successfully linked users to territory');
-          }
-        }
+      }
 
         // Step 3: Handle encapsulation of recovery territories before assigning leads
         await handleTerritoryEncapsulation(territoryId, polygonCoordinates);
 
         // Step 4: Find leads within the polygon and create lead-territory relationships
-        const leadsInPolygon = leads.filter(lead => 
-          isPointInPolygon({ latitude: lead.latitude, longitude: lead.longitude }, polygonCoordinates)
-        );
+      const leadsInPolygon = leads.filter(lead => 
+        isPointInPolygon({ latitude: lead.latitude, longitude: lead.longitude }, polygonCoordinates)
+      );
 
-        console.log(`Found ${leadsInPolygon.length} leads within polygon`);
+      console.log(`Found ${leadsInPolygon.length} leads within polygon`);
 
-        if (leadsInPolygon.length > 0) {
-          const leadJoinEntries = leadsInPolygon.map(lead => ({
-            lead_id: lead.id,
-            territory_id: territoryId,
-            created_at: new Date()
-          }));
+      if (leadsInPolygon.length > 0) {
+        const leadJoinEntries = leadsInPolygon.map(lead => ({
+          lead_id: lead.id,
+          territory_id: territoryId,
+          created_at: new Date()
+        }));
 
-          const { error: leadJoinError } = await supabase
-            .from('leads_join_territories')
-            .insert(leadJoinEntries);
+        const { error: leadJoinError } = await supabase
+          .from('leads_join_territories')
+          .insert(leadJoinEntries);
 
-          if (leadJoinError) {
-            console.error('Error linking leads to territory:', leadJoinError);
-            alert('Territory created but failed to assign some leads: ' + leadJoinError.message);
-          } else {
-            console.log('Successfully linked leads to territory');
-          }
+        if (leadJoinError) {
+          console.error('Error linking leads to territory:', leadJoinError);
+          alert('Territory created but failed to assign some leads: ' + leadJoinError.message);
+        } else {
+          console.log('Successfully linked leads to territory');
         }
+      }
 
         // Check and update any affected recovery territories
         await checkAndUpdateRecoveryTerritories();
 
-        alert(`Territory "${territoryName}" saved successfully!\n${selectedUsers.length} users assigned\n${leadsInPolygon.length} leads assigned`);
+      alert(`Territory "${territoryName}" saved successfully!\n${selectedUsers.length} users assigned\n${leadsInPolygon.length} leads assigned`);
       }
       
       // Reset form
