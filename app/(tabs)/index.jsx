@@ -193,6 +193,15 @@ export default function Tab() {
     }
   }
 
+  // Helper function to chunk arrays for large .in() queries
+  function chunkArray(array, chunkSize = 200) {
+    const chunks = [];
+    for (let i = 0; i < array.length; i += chunkSize) {
+      chunks.push(array.slice(i, i + chunkSize));
+    }
+    return chunks;
+  }
+
   async function fetchLeads() {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData?.user) return;
@@ -219,41 +228,59 @@ export default function Tab() {
       
       // Extract territory IDs
       const territoryIds = userTerritories.map(territory => territory.territory_id);
+      console.log(`Fetching leads for ${territoryIds.length} territories`);
       
-      // Get all lead IDs associated with these territories
-      const { data: territoryLeads, error: territoryLeadsError } = await supabase
-        .from('leads_join_territories')
-        .select('lead_id, territory_id')
-        .in('territory_id', territoryIds);
+      // Get all lead IDs associated with these territories - CHUNKED
+      let allTerritoryLeads = [];
+      const territoryChunks = chunkArray(territoryIds, 200);
       
-      if (territoryLeadsError) {
-        console.error('Error fetching territory leads:', territoryLeadsError);
-        return;
+      for (const chunk of territoryChunks) {
+        const { data: territoryLeads, error: territoryLeadsError } = await supabase
+          .from('leads_join_territories')
+          .select('lead_id, territory_id')
+          .in('territory_id', chunk);
+        
+        if (territoryLeadsError) {
+          console.error('Error fetching territory leads chunk:', territoryLeadsError);
+          return;
+        }
+        
+        if (territoryLeads) {
+          allTerritoryLeads = [...allTerritoryLeads, ...territoryLeads];
+        }
       }
       
-      if (!territoryLeads || territoryLeads.length === 0) {
+      if (allTerritoryLeads.length === 0) {
         console.log('No leads found in user territories');
         setLeads([]);
         return;
       }
       
       // Extract lead IDs
-      const leadIds = territoryLeads.map(lead => lead.lead_id);
+      const leadIds = allTerritoryLeads.map(lead => lead.lead_id);
+      console.log(`Fetching ${leadIds.length} leads`);
       
-      // Fetch the actual lead data
-      const { data: leads, error: leadsError } = await supabase
-        .from('leads')
-        .select('id, location, status, knocks, user_id')
-        .in('id', leadIds);
+      // Fetch the actual lead data - CHUNKED
+      let allLeads = [];
+      const leadChunks = chunkArray(leadIds, 200);
       
-      if (leadsError) {
-        console.error('Error fetching leads:', leadsError);
-        return;
+      for (const chunk of leadChunks) {
+        const { data: leads, error: leadsError } = await supabase
+          .from('leads')
+          .select('id, location, status, knocks, user_id')
+          .in('id', chunk);
+        
+        if (leadsError) {
+          console.error('Error fetching leads chunk:', leadsError);
+          return;
+        }
+        
+        if (leads) {
+          allLeads = [...allLeads, ...leads];
+        }
       }
       
-      if (leads) {
-        leadsData = [...leads];
-      }
+      leadsData = [...allLeads];
       
       // If manager mode is enabled and user has a team, fetch team leads
       if (isManager && managerModeEnabled && userTeamRef.current) {
@@ -267,42 +294,66 @@ export default function Tab() {
         if (teamUsersError) {
           console.error('Error fetching team users:', teamUsersError);
         } else if (teamUsers && teamUsers.length > 0) {
-          // Get all territory IDs for team members
+          // Get all territory IDs for team members - CHUNKED
           const teamUserIds = teamUsers.map(user => user.user_id);
+          let allTeamTerritories = [];
+          const userChunks = chunkArray(teamUserIds, 200);
           
-          const { data: teamTerritories, error: teamTerritoriesError } = await supabase
-            .from('users_join_territories')
-            .select('territory_id')
-            .in('uid', teamUserIds);
+          for (const chunk of userChunks) {
+            const { data: teamTerritories, error: teamTerritoriesError } = await supabase
+              .from('users_join_territories')
+              .select('territory_id')
+              .in('uid', chunk);
+            
+            if (teamTerritoriesError) {
+              console.error('Error fetching team territories chunk:', teamTerritoriesError);
+            } else if (teamTerritories) {
+              allTeamTerritories = [...allTeamTerritories, ...teamTerritories];
+            }
+          }
           
-          if (teamTerritoriesError) {
-            console.error('Error fetching team territories:', teamTerritoriesError);
-          } else if (teamTerritories && teamTerritories.length > 0) {
-            const teamTerritoryIds = teamTerritories.map(territory => territory.territory_id);
+          if (allTeamTerritories.length > 0) {
+            const teamTerritoryIds = allTeamTerritories.map(territory => territory.territory_id);
             
-            // Get lead IDs for team territories
-            const { data: teamTerritoryLeads, error: teamTerritoryLeadsError } = await supabase
-              .from('leads_join_territories')
-              .select('lead_id')
-              .in('territory_id', teamTerritoryIds);
+            // Get lead IDs for team territories - CHUNKED
+            let allTeamTerritoryLeads = [];
+            const teamTerritoryChunks = chunkArray(teamTerritoryIds, 200);
             
-            if (teamTerritoryLeadsError) {
-              console.error('Error fetching team territory leads:', teamTerritoryLeadsError);
-            } else if (teamTerritoryLeads && teamTerritoryLeads.length > 0) {
-              const teamLeadIds = teamTerritoryLeads.map(lead => lead.lead_id);
+            for (const chunk of teamTerritoryChunks) {
+              const { data: teamTerritoryLeads, error: teamTerritoryLeadsError } = await supabase
+                .from('leads_join_territories')
+                .select('lead_id')
+                .in('territory_id', chunk);
               
-              // Fetch team leads
-              const { data: teamLeads, error: teamLeadsError } = await supabase
-                .from('leads')
-                .select('id, location, status, knocks, user_id')
-                .in('id', teamLeadIds);
-              
-              if (teamLeadsError) {
-                console.error('Error fetching team leads:', teamLeadsError);
-              } else if (teamLeads) {
-                // Combine with user's own leads
-                leadsData = [...leadsData, ...teamLeads];
+              if (teamTerritoryLeadsError) {
+                console.error('Error fetching team territory leads chunk:', teamTerritoryLeadsError);
+              } else if (teamTerritoryLeads) {
+                allTeamTerritoryLeads = [...allTeamTerritoryLeads, ...teamTerritoryLeads];
               }
+            }
+            
+            if (allTeamTerritoryLeads.length > 0) {
+              const teamLeadIds = allTeamTerritoryLeads.map(lead => lead.lead_id);
+              
+              // Fetch team leads - CHUNKED
+              let allTeamLeads = [];
+              const teamLeadChunks = chunkArray(teamLeadIds, 200);
+              
+              for (const chunk of teamLeadChunks) {
+                const { data: teamLeads, error: teamLeadsError } = await supabase
+                  .from('leads')
+                  .select('id, location, status, knocks, user_id')
+                  .in('id', chunk);
+                
+                if (teamLeadsError) {
+                  console.error('Error fetching team leads chunk:', teamLeadsError);
+                } else if (teamLeads) {
+                  allTeamLeads = [...allTeamLeads, ...teamLeads];
+                }
+              }
+              
+              // Combine with user's own leads
+              leadsData = [...leadsData, ...allTeamLeads];
             }
           }
         }
@@ -311,13 +362,14 @@ export default function Tab() {
       // Format leads for the map
       const formattedLeads = leadsData.map((lead) => ({
         ...lead,
-        latitude: lead.location.coordinates[1],
-        longitude: lead.location.coordinates[0],
+        latitude: lead.location?.coordinates?.[1],
+        longitude: lead.location?.coordinates?.[0],
         // Only mark as team lead if in manager mode AND the lead belongs to someone else's territory
         // For now, we'll determine this based on whether it was fetched from team territories vs user territories
         isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
       }));
       
+      console.log(`Successfully loaded ${formattedLeads.length} leads`);
       setLeads(formattedLeads);
     } catch (error) {
       console.error('Unexpected error fetching leads:', error);

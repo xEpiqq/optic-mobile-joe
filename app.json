@@ -2,7 +2,7 @@
   "expo": {
     "name": "optic-mobile",
     "slug": "optic-mobile",
-    "version": "1.3.1",
+    "version": "1.3.7",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "myapp",
@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "buildNumber": "1.3.1",
+      "buildNumber": "1.3.7",
       "config": {
         "googleMapsApiKey": "AIzaSyCiJR22fxGkGoz7Ph8y9_0NcCRIbHBH2Fc"
       },
@@ -26,12 +26,12 @@
       "bundleIdentifier": "com.opticd2d.optic"
     },
     "android": {
-      "versionCode": 21,
+      "versionCode": 27,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.opticd2d.optic",
+      "package": "com.opticd2d.opticmobile",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyBQR090L8y1TlPP075mX_O_Fx2axQQJmc8"
