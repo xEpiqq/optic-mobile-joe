@@ -20,6 +20,7 @@ import { useClusterer } from 'react-native-clusterer';
 import * as Location from 'expo-location';
 import { WebView } from 'react-native-webview';
 import { useSupabase } from '../../contexts/SupabaseContext';
+import { GOOGLE_MAPS_API_KEY } from '../../config';
 import 'react-native-url-polyfill/auto';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -98,6 +99,15 @@ export default function Tab() {
   const [isSavingTerritory, setIsSavingTerritory] = useState(false);
   const [editingTerritory, setEditingTerritory] = useState(null);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [newLeadButtonPosition, setNewLeadButtonPosition] = useState({ x: 0, y: 0 });
+  const [showNewLeadButton, setShowNewLeadButton] = useState(false);
+  const [newLeadCoordinate, setNewLeadCoordinate] = useState(null);
+  const [showAddressValidation, setShowAddressValidation] = useState(false);
+  const [newLeadAddress, setNewLeadAddress] = useState('');
+  const [newLeadId, setNewLeadId] = useState(null);
+  const [isValidatingAddress, setIsValidatingAddress] = useState(false);
+  const [validationPosition, setValidationPosition] = useState({ x: 0, y: 0 });
+  const [editableAddress, setEditableAddress] = useState('');
 
   // normal stuff + fetch credential type
   useEffect(() => {
@@ -1209,6 +1219,309 @@ export default function Tab() {
     );
   }
 
+  async function createNewLead(coordinate) {
+    try {
+      setIsValidatingAddress(true);
+      // Get current user info
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user) {
+        Alert.alert('Error', 'Authentication error');
+        return;
+      }
+
+      // Get user's organization
+      const { data: userOrg, error: userOrgError } = await supabase
+        .from('profiles')
+        .select('organization')
+        .eq('user_id', userData.user.id)
+        .single();
+
+      if (userOrgError) {
+        console.error('Error fetching user organization:', userOrgError);
+        return;
+      }
+
+      // Get address from coordinates using reverse geocoding
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coordinate.latitude},${coordinate.longitude}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+      const data = await response.json();
+
+      if (!data.results || data.results.length === 0) {
+        console.error('No address found for coordinates');
+        return;
+      }
+
+      const addressComponents = data.results[0].address_components;
+      const formattedAddress = data.results[0].formatted_address;
+
+      // Extract address components
+      let streetNumber = '';
+      let route = '';
+      let city = '';
+      let state = '';
+      let zip = '';
+
+      addressComponents.forEach(component => {
+        if (component.types.includes('street_number')) {
+          streetNumber = component.long_name;
+        } else if (component.types.includes('route')) {
+          route = component.long_name;
+        } else if (component.types.includes('locality')) {
+          city = component.long_name;
+        } else if (component.types.includes('administrative_area_level_1')) {
+          state = component.short_name;
+        } else if (component.types.includes('postal_code')) {
+          zip = component.long_name;
+        }
+      });
+
+      // Create new lead with address information
+      const { data: newLead, error: leadError } = await supabase
+        .from('leads')
+        .insert([{
+          latitude: coordinate.latitude,
+          longitude: coordinate.longitude,
+          location: {
+            type: 'Point',
+            coordinates: [coordinate.longitude, coordinate.latitude]
+          },
+          organization: userOrg.organization,
+          status: 0,
+          address: `${streetNumber} ${route}`.trim(),
+          address2: '',
+          city: city,
+          state: state,
+          zip5: parseInt(zip) || null,
+          zip9: null,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          user_id: userData.user.id,
+          knocks: 0,
+          first_name: '',
+          last_name: '',
+          email: '',
+          phone: '',
+          dob: '',
+          territory: null
+        }])
+        .select()
+        .single();
+
+      if (leadError) {
+        console.error('Error creating lead:', leadError);
+        return;
+      }
+
+      // Set the address for validation
+      setNewLeadAddress(formattedAddress);
+      setEditableAddress(formattedAddress);
+      setNewLeadId(newLead.id);
+      setShowAddressValidation(true);
+      setIsValidatingAddress(false);
+    } catch (error) {
+      console.error('Error in createNewLead:', error);
+      setIsValidatingAddress(false);
+    }
+  }
+
+  async function confirmLeadAddress() {
+    try {
+      // Get current user info
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user) {
+        Alert.alert('Error', 'Authentication error');
+        return;
+      }
+
+      // Get user's organization
+      const { data: userOrg, error: userOrgError } = await supabase
+        .from('profiles')
+        .select('organization')
+        .eq('user_id', userData.user.id)
+        .single();
+
+      if (userOrgError) {
+        console.error('Error fetching user organization:', userOrgError);
+        return;
+      }
+
+      // Update the lead with the edited address
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({ 
+          address: editableAddress,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', newLeadId);
+
+      if (updateError) {
+        console.error('Error updating lead address:', updateError);
+        return;
+      }
+
+      // Get user's territories
+      const { data: userTerritories, error: userTerritoriesError } = await supabase
+        .from('users_join_territories')
+        .select('territory_id')
+        .eq('uid', userData.user.id);
+
+      if (userTerritoriesError) {
+        console.error('Error fetching user territories:', userTerritoriesError);
+        return;
+      }
+
+      // Get territory geometries
+      const territoryIds = userTerritories.map(t => t.territory_id);
+      const { data: territories, error: territoriesError } = await supabase
+        .from('territories')
+        .select('id, geom')
+        .in('id', territoryIds);
+
+      if (territoriesError) {
+        console.error('Error fetching territory geometries:', territoriesError);
+        return;
+      }
+
+      // Check if lead is in any existing territory
+      let leadInTerritory = false;
+      for (const territory of territories) {
+        if (!territory.geom || !territory.geom.coordinates || !territory.geom.coordinates[0]) {
+          continue;
+        }
+
+        const isInPolygon = isPointInPolygon(
+          { latitude: newLeadCoordinate.latitude, longitude: newLeadCoordinate.longitude },
+          territory.geom.coordinates[0]
+        );
+
+        if (isInPolygon) {
+          // Add lead to existing territory
+          const { error: joinError } = await supabase
+            .from('leads_join_territories')
+            .insert([{
+              lead_id: newLeadId,
+              territory_id: territory.id,
+              created_at: new Date().toISOString()
+            }]);
+
+          if (joinError) {
+            console.error('Error joining lead to territory:', joinError);
+          } else {
+            leadInTerritory = true;
+            break;
+          }
+        }
+      }
+
+      // If lead is not in any territory, create a new small territory
+      if (!leadInTerritory) {
+        // Create a small polygon around the point (approximately 100m radius)
+        const radius = 0.0009; // roughly 100m in degrees
+        const polygon = [
+          [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius],
+          [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude - radius],
+          [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude + radius],
+          [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude + radius],
+          [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius]
+        ];
+
+        // Create new territory
+        const { data: newTerritory, error: territoryError } = await supabase
+          .from('territories')
+          .insert([{
+            name: `Lead ${newLeadId} Territory`,
+            geom: {
+              type: 'Polygon',
+              coordinates: [polygon]
+            },
+            organization: userOrg.organization,
+            created_at: new Date().toISOString()
+          }])
+          .select()
+          .single();
+
+        if (territoryError) {
+          console.error('Error creating territory:', territoryError);
+          return;
+        }
+
+        // Add user to territory
+        const { error: userJoinError } = await supabase
+          .from('users_join_territories')
+          .insert([{
+            uid: userData.user.id,
+            territory_id: newTerritory.id,
+            created_at: new Date().toISOString()
+          }]);
+
+        if (userJoinError) {
+          console.error('Error joining user to territory:', userJoinError);
+          return;
+        }
+
+        // Add lead to territory
+        const { error: leadJoinError } = await supabase
+          .from('leads_join_territories')
+          .insert([{
+            lead_id: newLeadId,
+            territory_id: newTerritory.id,
+            created_at: new Date().toISOString()
+          }]);
+
+        if (leadJoinError) {
+          console.error('Error joining lead to territory:', leadJoinError);
+          return;
+        }
+      }
+
+      // Clear all state and close modal
+      setShowNewLeadButton(false);
+      setShowAddressValidation(false);
+      setNewLeadAddress('');
+      setEditableAddress('');
+      setNewLeadId(null);
+      setNewLeadCoordinate(null);
+      setValidationPosition({ x: 0, y: 0 });
+      
+      // Refresh leads list after everything is done
+      await fetchLeads();
+    } catch (error) {
+      console.error('Error in confirmLeadAddress:', error);
+      // Still clear state even if there's an error
+      setShowNewLeadButton(false);
+      setShowAddressValidation(false);
+      setNewLeadAddress('');
+      setEditableAddress('');
+      setNewLeadId(null);
+      setNewLeadCoordinate(null);
+      setValidationPosition({ x: 0, y: 0 });
+    }
+  }
+
+  async function cancelLeadCreation() {
+    try {
+      // Delete the lead if it exists
+      if (newLeadId) {
+        const { error: deleteError } = await supabase
+          .from('leads')
+          .delete()
+          .eq('id', newLeadId);
+
+        if (deleteError) {
+          console.error('Error deleting lead:', deleteError);
+        }
+      }
+
+      setShowNewLeadButton(false);
+      setShowAddressValidation(false);
+      setNewLeadAddress('');
+      setNewLeadId(null);
+    } catch (error) {
+      console.error('Error in cancelLeadCreation:', error);
+    }
+  }
+
   const memoizedMap = useMemo(
     () => (
       <MapView
@@ -1226,13 +1539,24 @@ export default function Tab() {
           } else {
             selectedLead.current = null;
             setDummyRender((prev) => !prev);
+            setShowNewLeadButton(false);
+          }
+        }}
+        onLongPress={(e) => {
+          if (!isDrawing && !isDrawingMode) {
+            const { coordinate } = e.nativeEvent;
+            setNewLeadCoordinate(coordinate);
+            mapRef.current.pointForCoordinate(coordinate).then((point) => {
+              setNewLeadButtonPosition(point);
+              setShowNewLeadButton(true);
+            });
           }
         }}
         moveOnMarkerPress={false}
         showsUserLocation={locationPermission}
         scrollEnabled={!isDrawing && !isDrawingMode}
         mapType={isSatellite ? 'satellite' : 'standard'}
-        showsMyLocationButton={false} // Add this line to hide the default location button on Android
+        showsMyLocationButton={false}
         onMapReady={() => setIsMapReady(true)}
       >
         {/* Render team territories when manager mode is enabled */}
@@ -1531,16 +1855,19 @@ export default function Tab() {
 
   // Point-in-polygon algorithm (Ray casting)
   function isPointInPolygon(point, polygon) {
-    const { latitude: x, longitude: y } = point;
+    const { latitude: y, longitude: x } = point;
     let inside = false;
     
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-      const xi = polygon[i].latitude;
-      const yi = polygon[i].longitude;
-      const xj = polygon[j].latitude;
-      const yj = polygon[j].longitude;
+      const xi = polygon[i][0]; // longitude
+      const yi = polygon[i][1]; // latitude
+      const xj = polygon[j][0]; // longitude
+      const yj = polygon[j][1]; // latitude
       
-      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+      const intersect = ((yi > y) !== (yj > y)) && 
+        (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      
+      if (intersect) {
         inside = !inside;
       }
     }
@@ -2407,12 +2734,83 @@ export default function Tab() {
     }
   }
 
+  async function deleteLead() {
+    if (!recentLead.current?.id) {
+      console.error('No lead selected for deletion');
+      return;
+    }
+    
+    // Show confirmation dialog
+    Alert.alert(
+      "Delete Lead",
+      "Are you sure you want to delete this lead and it's associated data? This action cannot be undone.",
+      [
+        {
+          text: "Cancel",
+          style: "cancel"
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              // First delete related notes
+              const { error: notesError } = await supabase
+                .from('notes')
+                .delete()
+                .eq('lead_id', recentLead.current.id);
+
+              if (notesError) {
+                console.error('Error deleting notes:', notesError);
+                Alert.alert('Error', 'Failed to delete lead notes');
+                return;
+              }
+
+              // Then delete lead-territory relationships
+              const { error: joinError } = await supabase
+                .from('leads_join_territories')
+                .delete()
+                .eq('lead_id', recentLead.current.id);
+
+              if (joinError) {
+                console.error('Error deleting lead-territory relationships:', joinError);
+                Alert.alert('Error', 'Failed to delete lead-territory relationships');
+                return;
+              }
+
+              // Finally delete the lead itself
+              const { error: leadError } = await supabase
+                .from('leads')
+                .delete()
+                .eq('id', recentLead.current.id);
+
+              if (leadError) {
+                console.error('Error deleting lead:', leadError);
+                Alert.alert('Error', 'Failed to delete lead');
+                return;
+              }
+
+              // Close the big menu and refresh the leads list
+              closeBigMenu();
+              fetchLeads();
+            } catch (error) {
+              console.error('Error in deleteLead:', error);
+              Alert.alert('Error', 'An unexpected error occurred while deleting the lead');
+            }
+          }
+        }
+      ]
+    );
+  }
+
   return (
     <View className="flex-1 w-full h-full">
       {memoizedMap}
       {renderStatusMenu()}
       {renderNoteModal()}
       {renderFullNotesModal()}
+      {/* Remove the first Create New Lead button */}
+
       {/* Hamburger Menu */}
       <View className="absolute top-10 left-4 z-10">
         <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
@@ -3050,90 +3448,164 @@ export default function Tab() {
       </>
     )}
 
-    {/* Big Menu */}
+    {/* Big Menu Modal */}
     {bigMenu && (
       <Modal
-            animationType="slide"
-            transparent={false}
-            visible={bigMenu}
-            onRequestClose={closeBigMenu}
-            statusBarTranslucent={false}
-          >
-            {/* Status Bar Styling */}
-            <StatusBar
-              barStyle="light-content"
-              backgroundColor="#121212" // Dark background for the status bar
-            />
+        animationType="slide"
+        transparent={false}
+        visible={bigMenu}
+        onRequestClose={closeBigMenu}
+        statusBarTranslucent={false}
+      >
+        {/* Status Bar Styling */}
+        <StatusBar
+          barStyle="light-content"
+          backgroundColor="#121212" // Dark background for the status bar
+        />
 
-            <View className="flex-1 bg-gray-900 px-6 py-8">
-              {/* Header */}
-              <View className="flex-row justify-between items-center mb-6">
-                <Text className="text-xl font-semibold text-white">Lead Information</Text>
-                <TouchableOpacity onPress={closeBigMenu} accessibilityLabel="Close Menu" accessible={true}>
-                  <Text className="text-2xl font-bold text-gray-200">✕</Text>
-                </TouchableOpacity>
-              </View>
+        <View className="flex-1 bg-gray-900 px-6 py-8">
+          {/* Header */}
+          <View className="flex-row justify-between items-center mb-6">
+            <Text className="text-xl font-semibold text-white">Lead Information</Text>
+            <TouchableOpacity onPress={closeBigMenu} accessibilityLabel="Close Menu" accessible={true}>
+              <Text className="text-2xl font-bold text-gray-200">✕</Text>
+            </TouchableOpacity>
+          </View>
 
-              {/* Input Fields */}
-              <ScrollView className="flex-1">
-                <View className="space-y-4">
-                  <TextInput
-                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                    placeholder="First Name"
-                    defaultValue={firstName.current}
-                    onChangeText={(text) => (firstName.current = text)}
-                    placeholderTextColor="#A1A1AA"
-                    autoCapitalize="words"
-                  />
-                  <TextInput
-                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                    placeholder="Last Name"
-                    defaultValue={lastName.current}
-                    onChangeText={(text) => (lastName.current = text)}
-                    placeholderTextColor="#A1A1AA"
-                    autoCapitalize="words"
-                  />
-                  <TextInput
-                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                    placeholder="Date of Birth (MM/DD/YYYY)"
-                    defaultValue={dob.current}
-                    onChangeText={(text) => (dob.current = text)}
-                    keyboardType="numeric"
-                    placeholderTextColor="#A1A1AA"
-                    maxLength={10}
-                  />
-                  <TextInput
-                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                    placeholder="Phone"
-                    defaultValue={phone.current}
-                    onChangeText={(text) => (phone.current = text)}
-                    keyboardType="phone-pad"
-                    placeholderTextColor="#A1A1AA"
-                  />
-                  <TextInput
-                    className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
-                    placeholder="Email"
-                    defaultValue={email.current}
-                    onChangeText={(text) => (email.current = text)}
-                    keyboardType="email-address"
-                    placeholderTextColor="#A1A1AA"
-                    autoCapitalize="none"
-                  />
-                </View>
-              </ScrollView>
-
-              {/* Start Sale Button */}
-              <TouchableOpacity
-                className="bg-blue-600 py-3 rounded-lg mt-6 items-center shadow"
-                onPress={startSale}
-                accessibilityLabel="Start Sale"
-                accessible={true}
+          {/* Input Fields */}
+          <ScrollView className="flex-1">
+            <View className="space-y-4">
+              <TextInput
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                placeholder="First Name"
+                defaultValue={firstName.current}
+                onChangeText={(text) => (firstName.current = text)}
+                placeholderTextColor="#A1A1AA"
+                autoCapitalize="words"
+              />
+              <TextInput
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                placeholder="Last Name"
+                defaultValue={lastName.current}
+                onChangeText={(text) => (lastName.current = text)}
+                placeholderTextColor="#A1A1AA"
+                autoCapitalize="words"
+              />
+              <TextInput
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                placeholder="Date of Birth (MM/DD/YYYY)"
+                defaultValue={dob.current}
+                onChangeText={(text) => (dob.current = text)}
+                keyboardType="numeric"
+                placeholderTextColor="#A1A1AA"
+                maxLength={10}
+              />
+              <TextInput
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                placeholder="Phone"
+                defaultValue={phone.current}
+                onChangeText={(text) => (phone.current = text)}
+                keyboardType="phone-pad"
+                placeholderTextColor="#A1A1AA"
+              />
+              <TextInput
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                placeholder="Email"
+                defaultValue={email.current}
+                onChangeText={(text) => (email.current = text)}
+                keyboardType="email-address"
+                placeholderTextColor="#A1A1AA"
+                autoCapitalize="none"
+              />
+              <TouchableOpacity 
+                onPress={() => deleteLead()}
+                className="bg-red-600 px-4 py-2 rounded-lg self-start"
               >
-                <Text className="text-white text-lg font-semibold">Start Sale</Text>
+                <Text className="text-white font-semibold">Delete Lead</Text>
               </TouchableOpacity>
             </View>
-          </Modal>
-      )}
+          </ScrollView>
+
+          {/* Start Sale Button */}
+          <TouchableOpacity
+            className="bg-blue-600 py-3 rounded-lg mt-6 items-center shadow"
+            onPress={startSale}
+            accessibilityLabel="Start Sale"
+            accessible={true}
+          >
+            <Text className="text-white text-lg font-semibold">Start Sale</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
+    )}
+
+    {/* Address Validation Modal */}
+    {showAddressValidation && (
+      <View className="absolute inset-0 bg-black bg-opacity-50 z-50">
+        <ScrollView 
+          className="flex-1"
+          contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View className="bg-white rounded-lg p-4 m-4">
+            <Text className="text-xl font-bold mb-4">Confirm Intended Address</Text>
+            <TextInput
+              className="border border-gray-300 rounded-lg p-3 mb-4 text-lg"
+              value={editableAddress}
+              onChangeText={setEditableAddress}
+              multiline
+              numberOfLines={3}
+              placeholder="Enter or edit the address"
+            />
+            <View className="flex-row justify-end space-x-3">
+              <TouchableOpacity
+                className="bg-gray-500 px-4 py-2 rounded-lg"
+                onPress={cancelLeadCreation}
+              >
+                <Text className="text-white font-semibold">Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                className="bg-blue-500 px-4 py-2 rounded-lg"
+                onPress={confirmLeadAddress}
+              >
+                <Text className="text-white font-semibold">Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </ScrollView>
+      </View>
+    )}
+
+    {/* Loading Overlay */}
+    {isValidatingAddress && (
+      <View className="absolute inset-0 bg-black bg-opacity-50 justify-center items-center z-50">
+        <View className="bg-white rounded-lg p-4 m-4 w-[90%] max-w-md">
+          <Text className="text-lg font-semibold mb-2">Creating Lead...</Text>
+          <Text className="text-gray-600">Please wait while we process your request.</Text>
+        </View>
+      </View>
+    )}
+
+    {/* Create New Lead Button */}
+    {showNewLeadButton && !showAddressValidation && newLeadButtonPosition && (
+      <TouchableOpacity
+        className="absolute z-50 bg-blue-500 px-4 py-2 rounded-lg shadow-lg"
+        style={{
+          left: newLeadButtonPosition.x,
+          top: newLeadButtonPosition.y,
+          transform: [
+            { translateX: -64 },
+            { translateY: -50 }
+          ]
+        }}
+        onPress={() => {
+          createNewLead(newLeadCoordinate);
+          setShowNewLeadButton(false);
+        }}
+      >
+        <Text className="text-white font-semibold">Create New Lead</Text>
+      </TouchableOpacity>
+    )}
 
   </View>
 );
