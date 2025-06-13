@@ -156,11 +156,13 @@ export default function Tab() {
   // Refetch leads when manager mode changes
   useEffect(() => {
     if (isManager) {
-      fetchLeads();
       if (managerModeEnabled) {
+        fetchLeads();
         fetchTeamTerritories();
       } else {
+        // When manager mode is disabled, clear team territories and refetch only personal leads
         setTeamTerritories([]);
+        fetchLeads();
       }
     }
   }, [managerModeEnabled]);
@@ -322,48 +324,28 @@ export default function Tab() {
             }
           }
           
+          // Get leads for team territories
           if (allTeamTerritories.length > 0) {
-            const teamTerritoryIds = allTeamTerritories.map(territory => territory.territory_id);
+            const territoryIds = allTeamTerritories.map(t => t.territory_id);
+            const { data: teamLeads, error: teamLeadsError } = await supabase
+              .from('leads_join_territories')
+              .select('lead_id')
+              .in('territory_id', territoryIds);
             
-            // Get lead IDs for team territories - CHUNKED
-            let allTeamTerritoryLeads = [];
-            const teamTerritoryChunks = chunkArray(teamTerritoryIds, 200);
-            
-            for (const chunk of teamTerritoryChunks) {
-              const { data: teamTerritoryLeads, error: teamTerritoryLeadsError } = await supabase
-                .from('leads_join_territories')
-                .select('lead_id')
-                .in('territory_id', chunk);
+            if (teamLeadsError) {
+              console.error('Error fetching team leads:', teamLeadsError);
+            } else if (teamLeads) {
+              const teamLeadIds = teamLeads.map(l => l.lead_id);
+              const { data: teamLeadData, error: teamLeadDataError } = await supabase
+                .from('leads')
+                .select('id, location, status, knocks, user_id')
+                .in('id', teamLeadIds);
               
-              if (teamTerritoryLeadsError) {
-                console.error('Error fetching team territory leads chunk:', teamTerritoryLeadsError);
-              } else if (teamTerritoryLeads) {
-                allTeamTerritoryLeads = [...allTeamTerritoryLeads, ...teamTerritoryLeads];
+              if (teamLeadDataError) {
+                console.error('Error fetching team lead data:', teamLeadDataError);
+              } else if (teamLeadData) {
+                leadsData = [...leadsData, ...teamLeadData];
               }
-            }
-            
-            if (allTeamTerritoryLeads.length > 0) {
-              const teamLeadIds = allTeamTerritoryLeads.map(lead => lead.lead_id);
-              
-              // Fetch team leads - CHUNKED
-              let allTeamLeads = [];
-              const teamLeadChunks = chunkArray(teamLeadIds, 200);
-              
-              for (const chunk of teamLeadChunks) {
-                const { data: teamLeads, error: teamLeadsError } = await supabase
-                  .from('leads')
-                  .select('id, location, status, knocks, user_id')
-                  .in('id', chunk);
-                
-                if (teamLeadsError) {
-                  console.error('Error fetching team leads chunk:', teamLeadsError);
-                } else if (teamLeads) {
-                  allTeamLeads = [...allTeamLeads, ...teamLeads];
-                }
-              }
-              
-              // Combine with user's own leads
-              leadsData = [...leadsData, ...allTeamLeads];
             }
           }
         }
