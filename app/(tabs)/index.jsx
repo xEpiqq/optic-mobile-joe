@@ -108,6 +108,10 @@ export default function Tab() {
   const [isValidatingAddress, setIsValidatingAddress] = useState(false);
   const [validationPosition, setValidationPosition] = useState({ x: 0, y: 0 });
   const [editableAddress, setEditableAddress] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState('');
+  const [selectedLeadId, setSelectedLeadId] = useState(null);  // Add this new state
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
   // normal stuff + fetch credential type
   useEffect(() => {
@@ -214,157 +218,93 @@ export default function Tab() {
     return chunks;
   }
 
+  // Add this new function to handle loading states
+  const setLoading = (loading, message = '') => {
+    setIsLoading(loading);
+    setLoadingMessage(message);
+  };
+
+  // Update fetchLeads to use the new loading state
   async function fetchLeads() {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData?.user) return;
     
     try {
-      let leadsData = [];
+      setLoading(true, 'Loading leads...');
+      // Add loading state
+      setIsLoading(true);
       
-      // Get all territory IDs associated with the current user
+      // Fetch only essential data first
       const { data: userTerritories, error: userTerritoriesError } = await supabase
-        .from('users_join_territories')
-        .select('territory_id')
-        .eq('uid', userData.user.id);
+          .from('users_join_territories')
+          .select('territory_id')
+          .eq('uid', userData.user.id);
       
       if (userTerritoriesError) {
-        console.error('Error fetching user territories:', userTerritoriesError);
-        return;
+          console.error('Error fetching user territories:', userTerritoriesError);
+          return;
       }
       
       if (!userTerritories || userTerritories.length === 0) {
-        console.log('No territories assigned to this user');
-        setLeads([]);
-        return;
+          console.log('No territories assigned to this user');
+          setLeads([]);
+          return;
       }
       
-      // Extract territory IDs
+      // Fetch leads in smaller chunks
       const territoryIds = userTerritories.map(territory => territory.territory_id);
-      console.log(`Fetching leads for ${territoryIds.length} territories`);
-      
-      // Get all lead IDs associated with these territories - CHUNKED
-      let allTerritoryLeads = [];
-      const territoryChunks = chunkArray(territoryIds, 200);
-      
-      for (const chunk of territoryChunks) {
-        const { data: territoryLeads, error: territoryLeadsError } = await supabase
-          .from('leads_join_territories')
-          .select('lead_id, territory_id')
-          .in('territory_id', chunk);
-        
-        if (territoryLeadsError) {
-          console.error('Error fetching territory leads chunk:', territoryLeadsError);
-          return;
-        }
-        
-        if (territoryLeads) {
-          allTerritoryLeads = [...allTerritoryLeads, ...territoryLeads];
-        }
-      }
-      
-      if (allTerritoryLeads.length === 0) {
-        console.log('No leads found in user territories');
-        setLeads([]);
-        return;
-      }
-      
-      // Extract lead IDs
-      const leadIds = allTerritoryLeads.map(lead => lead.lead_id);
-      console.log(`Fetching ${leadIds.length} leads`);
-      
-      // Fetch the actual lead data - CHUNKED
+      const chunkSize = 50; // Smaller chunks for better performance
       let allLeads = [];
-      const leadChunks = chunkArray(leadIds, 200);
       
-      for (const chunk of leadChunks) {
-        const { data: leads, error: leadsError } = await supabase
-          .from('leads')
-          .select('id, location, status, knocks, user_id')
-          .in('id', chunk);
-        
-        if (leadsError) {
-          console.error('Error fetching leads chunk:', leadsError);
-          return;
-        }
-        
-        if (leads) {
-          allLeads = [...allLeads, ...leads];
-        }
-      }
-      
-      leadsData = [...allLeads];
-      
-      // If manager mode is enabled and user has a team, fetch team leads
-      if (isManager && managerModeEnabled && userTeamRef.current) {
-        // First get all users in the same team
-        const { data: teamUsers, error: teamUsersError } = await supabase
-          .from('profiles')
-          .select('user_id')
-          .eq('team', userTeamRef.current)
-          .neq('user_id', userData.user.id); // Exclude the current user
-        
-        if (teamUsersError) {
-          console.error('Error fetching team users:', teamUsersError);
-        } else if (teamUsers && teamUsers.length > 0) {
-          // Get all territory IDs for team members - CHUNKED
-          const teamUserIds = teamUsers.map(user => user.user_id);
-          let allTeamTerritories = [];
-          const userChunks = chunkArray(teamUserIds, 200);
+      for (let i = 0; i < territoryIds.length; i += chunkSize) {
+          const chunk = territoryIds.slice(i, i + chunkSize);
           
-          for (const chunk of userChunks) {
-            const { data: teamTerritories, error: teamTerritoriesError } = await supabase
-              .from('users_join_territories')
-              .select('territory_id')
-              .in('uid', chunk);
-            
-            if (teamTerritoriesError) {
-              console.error('Error fetching team territories chunk:', teamTerritoriesError);
-            } else if (teamTerritories) {
-              allTeamTerritories = [...allTeamTerritories, ...teamTerritories];
-            }
-          }
-          
-          // Get leads for team territories
-          if (allTeamTerritories.length > 0) {
-            const territoryIds = allTeamTerritories.map(t => t.territory_id);
-            const { data: teamLeads, error: teamLeadsError } = await supabase
+          // Get leads for this chunk of territories
+          const { data: territoryLeads, error: territoryLeadsError } = await supabase
               .from('leads_join_territories')
               .select('lead_id')
-              .in('territory_id', territoryIds);
-            
-            if (teamLeadsError) {
-              console.error('Error fetching team leads:', teamLeadsError);
-            } else if (teamLeads) {
-              const teamLeadIds = teamLeads.map(l => l.lead_id);
-              const { data: teamLeadData, error: teamLeadDataError } = await supabase
-                .from('leads')
-                .select('id, location, status, knocks, user_id')
-                .in('id', teamLeadIds);
+              .in('territory_id', chunk);
               
-              if (teamLeadDataError) {
-                console.error('Error fetching team lead data:', teamLeadDataError);
-              } else if (teamLeadData) {
-                leadsData = [...leadsData, ...teamLeadData];
-              }
-            }
+          if (territoryLeadsError) {
+              console.error('Error fetching territory leads chunk:', territoryLeadsError);
+              continue;
           }
-        }
+          
+          if (territoryLeads && territoryLeads.length > 0) {
+              const leadIds = territoryLeads.map(lead => lead.lead_id);
+              
+              // Fetch lead details for this chunk
+              const { data: leads, error: leadsError } = await supabase
+                  .from('leads')
+                  .select('id, location, status, knocks, user_id')
+                  .in('id', leadIds);
+                  
+              if (leadsError) {
+                  console.error('Error fetching leads chunk:', leadsError);
+                  continue;
+              }
+              
+              if (leads) {
+                  allLeads = [...allLeads, ...leads];
+              }
+          }
       }
       
       // Format leads for the map
-      const formattedLeads = leadsData.map((lead) => ({
-        ...lead,
-        latitude: lead.location?.coordinates?.[1],
-        longitude: lead.location?.coordinates?.[0],
-        // Only mark as team lead if in manager mode AND the lead belongs to someone else's territory
-        // For now, we'll determine this based on whether it was fetched from team territories vs user territories
-        isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
+      const formattedLeads = allLeads.map((lead) => ({
+          ...lead,
+          latitude: lead.location?.coordinates?.[1],
+          longitude: lead.location?.coordinates?.[0],
+          isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
       }));
       
-      console.log(`Successfully loaded ${formattedLeads.length} leads`);
       setLeads(formattedLeads);
+      console.log(`Successfully loaded ${formattedLeads.length} leads`);
+      
     } catch (error) {
       console.error('Unexpected error fetching leads:', error);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -479,16 +419,10 @@ export default function Tab() {
   }
 
   async function updateLeadStatus(leadId, newStatus) {
-    // Get the lead to check if it's editable
-    const lead = leads.find(l => l.id === leadId);
+    // Store the previous status in case we need to revert
+    const previousStatus = leads.find(l => l.id === leadId)?.status;
     
-    // Only block editing if it's a team lead in manager mode (leads from other territories)
-    if (lead && lead.isTeamLead && isManager && managerModeEnabled) {
-      console.log('Cannot update status of team leads from other territories');
-      return;
-    }
-    
-    // Optimistic state update for immediate visual feedback
+    // Optimistic update
     setLeads((prevLeads) =>
       prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
     );
@@ -500,14 +434,18 @@ export default function Tab() {
         .eq('id', leadId);
 
       if (error) {
+        // Revert to previous status instead of full refetch
+        setLeads((prevLeads) =>
+          prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: previousStatus } : lead))
+        );
         console.error('Error updating lead status:', error);
-        // Revert state change on error
-        fetchLeads();
       }
     } catch (error) {
+      // Revert to previous status instead of full refetch
+      setLeads((prevLeads) =>
+        prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: previousStatus } : lead))
+      );
       console.error('Unexpected error updating lead status:', error);
-      // Fallback fetch if something goes wrong
-      fetchLeads();
     }
   }
 
@@ -525,8 +463,9 @@ export default function Tab() {
   }
 
   function showFullNotesModal(leadId) {
-    fetchAllNotes(leadId);
+    setIsModalOpen(true);
     setIsFullNotesModalVisible(true);
+    fetchAllNotes(leadId);
   }
 
   async function fetchAllNotes(leadId) {
@@ -573,6 +512,8 @@ export default function Tab() {
   function showMenu(lead, event) {
     if (recentNote !== '') setRecentNote('');
     recentLead.current = lead;
+    setSelectedLeadId(lead.id);
+    setIsModalOpen(true);
 
     const { coordinate } = event.nativeEvent;
     mapRef.current.pointForCoordinate(coordinate).then((point) => {
@@ -586,19 +527,22 @@ export default function Tab() {
   }
 
   function showBigMenu(lead) {
-    // Only block big menu for team leads in manager mode (leads from other territories)
     if (lead.isTeamLead && isManager && managerModeEnabled) {
       return;
     }
     
     selectedLead.current = lead;
+    setSelectedLeadId(lead.id);  // Set the selected lead ID
     setBigMenu(true);
+    setIsModalOpen(true);
     handleDragStart(lead);
   }
 
   function closeBigMenu() {
     setBigMenu(false);
     selectedLead.current = null;
+    setSelectedLeadId(null);  // Clear the selected lead ID
+    setIsModalOpen(false);
     firstName.current = '';
     lastName.current = '';
     phone.current = '';
@@ -637,27 +581,46 @@ export default function Tab() {
   }
 
   async function addNote() {
+    if (!selectedLeadId) {
+      console.error('No lead selected for note');
+      return;
+    }
+
     const trimmedNote = noteText.trim();
     if (trimmedNote === '') return;
 
-    setRecentNote({ note: trimmedNote, created_at: new Date().toISOString() });
+    // Store the note locally first
+    const newNote = { 
+        note: trimmedNote, 
+        created_at: new Date().toISOString() 
+    };
+    
+    // Update UI immediately
+    setRecentNote(newNote);
     setNoteText('');
     setIsNoteModalVisible(false);
 
-    const { data: userData } = await supabase.auth.getUser();
-    if (!userData?.user) return;
+    try {
+        setLoading(true, 'Adding note...');
+        const { data: userData } = await supabase.auth.getUser();
+        if (!userData?.user) return;
 
-    const { error } = await supabase.from('notes').insert({
-      lead_id: recentLead.current.id,
-      note: trimmedNote,
-      created_by: userData.user.id,
-    });
+        const { error } = await supabase.from('notes').insert({
+            lead_id: selectedLeadId,  // Use the state instead of ref
+            note: trimmedNote,
+            created_by: userData.user.id,
+        });
 
-    if (error) {
-      console.error('Error adding note:', error);
-      setRecentNote(null);
+        if (error) {
+            setRecentNote(null);
+            console.error('Error adding note:', error);
+        }
+    } catch (error) {
+        setRecentNote(null);
+        console.error('Error adding note:', error);
+    } finally {
+        setLoading(false);
     }
-    setDummyRender((prev) => !prev);
   }
 
   function formatDob(dob) {
@@ -1042,7 +1005,6 @@ export default function Tab() {
 
   function renderStatusMenu() {
     if (!selectedLead.current) return null;
-
     const statuses = ['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'];
     const colors = ['#800080', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
 
@@ -1091,6 +1053,7 @@ export default function Tab() {
             position: 'absolute',
             left: menuPosition.x + width / 2 - 150,
             top: menuPosition.y + height / 2,
+            zIndex: 1000,
           }}
         >
           {statuses.map((status, index) => (
@@ -1099,29 +1062,30 @@ export default function Tab() {
               className="p-2.5 items-center"
               onPress={() => {
                 updateLeadStatus(selectedLead.current.id, index);
-                selectedLead.current = null;
-                setMenuPosition({ x: 0, y: 0 });
+                // Remove the immediate modal closing - let handleMapInteraction handle it
               }}
-              disabled={selectedLead.current.isTeamLead && isManager && managerModeEnabled}
             >
-              <View 
-                style={{ 
-                  backgroundColor: colors[index],
-                  opacity: selectedLead.current.isTeamLead && isManager && managerModeEnabled ? 0.5 : 1
-                }} 
-                className="h-0.5 w-full mb-0.5" 
-              />
-              <Text 
-                className={`text-xs text-center mt-0.5 ${selectedLead.current.isTeamLead && isManager && managerModeEnabled ? 'text-gray-400' : 'text-black'}`}
-              >
-                {status}
-              </Text>
+              <View style={{ backgroundColor: colors[index] }} className="h-0.5 w-full mb-0.5" />
+              <Text className="text-xs text-center mt-0.5">{status}</Text>
             </TouchableOpacity>
           ))}
+        </View>
+        
+        {/* Note Button in separate View with high zIndex */}
+        <View
+          style={{
+            position: 'absolute',
+            left: menuPosition.x + width / 2 - 150, // Align with the left edge of status menu
+            top: menuPosition.y + height / 2 + 60, // Increased from 45 to 60 to move it lower
+            zIndex: 1001,
+          }}
+        >
           <TouchableOpacity
-            className={`${selectedLead.current.isTeamLead && isManager && managerModeEnabled ? 'bg-gray-400' : 'bg-blue-500'} rounded-full py-2 px-3 shadow mt-0 absolute right-0 top-16`}
-            onPress={() => setIsNoteModalVisible(true)}
-            disabled={selectedLead.current.isTeamLead && isManager && managerModeEnabled}
+            className="bg-blue-500 rounded-full py-2 px-3 shadow"
+            onPress={() => {
+              setIsNoteModalVisible(true);
+            }}
+            activeOpacity={0.7}
           >
             <Text className="text-white text-sm font-bold">+Note</Text>
           </TouchableOpacity>
@@ -1136,7 +1100,10 @@ export default function Tab() {
         animationType="slide"
         transparent={false}
         visible={isNoteModalVisible}
-        onRequestClose={() => setIsNoteModalVisible(false)}
+        onRequestClose={() => {
+          setIsNoteModalVisible(false);
+          setIsModalOpen(false);
+        }}
       >
         <View className="flex-1 bg-white">
           <View className="p-5">
@@ -1153,13 +1120,19 @@ export default function Tab() {
             <View className="flex-row justify-between mt-4">
               <TouchableOpacity
                 className="bg-gray-500 py-3 px-6 rounded-lg items-center flex-1 mr-2"
-                onPress={() => setIsNoteModalVisible(false)}
+                onPress={() => {
+                  setIsNoteModalVisible(false);
+                  setIsModalOpen(false);
+                }}
               >
                 <Text className="text-white font-medium">Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 className="bg-blue-600 py-3 px-6 rounded-lg items-center flex-1 ml-2"
-                onPress={addNote}
+                onPress={() => {
+                  addNote();
+                  setIsModalOpen(false);
+                }}
               >
                 <Text className="text-white font-medium">Save</Text>
               </TouchableOpacity>
@@ -1176,7 +1149,10 @@ export default function Tab() {
         animationType="slide"
         transparent={false}
         visible={isFullNotesModalVisible}
-        onRequestClose={() => setIsFullNotesModalVisible(false)}
+        onRequestClose={() => {
+          setIsFullNotesModalVisible(false);
+          setIsModalOpen(false);
+        }}
       >
         <View className="flex-1 bg-white p-5 justify-start">
           <Text className="text-2xl font-bold mb-5 text-center text-gray-800">All Notes</Text>
@@ -1192,7 +1168,10 @@ export default function Tab() {
           </ScrollView>
           <TouchableOpacity
             className="bg-blue-500 py-3.5 rounded mt-5 items-center"
-            onPress={() => setIsFullNotesModalVisible(false)}
+            onPress={() => {
+              setIsFullNotesModalVisible(false);
+              setIsModalOpen(false);
+            }}
           >
             <Text className="text-white text-lg font-bold">Close</Text>
           </TouchableOpacity>
@@ -1504,27 +1483,47 @@ export default function Tab() {
     }
   }
 
+  function handleMapInteraction() {
+    // Close all modals
+    setBigMenu(false);
+    setIsNoteModalVisible(false);
+    setIsFullNotesModalVisible(false);
+    setIsModalOpen(false);
+    
+    // Clear lead status
+    selectedLead.current = null;
+    setSelectedLeadId(null);
+    setRecentNote(null);
+    setLeadAddress(null);
+    setMenuPosition({ x: 0, y: 0 });
+    setDummyRender((prev) => !prev);
+  }
+
   const memoizedMap = useMemo(
     () => (
       <MapView
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         initialRegion={initialRegion}
-        onRegionChangeComplete={onRegionChangeComplete}
+        onRegionChangeComplete={(newRegion) => {
+          onRegionChangeComplete(newRegion);
+          handleMapInteraction();
+        }}
         className="flex-1"
         onPress={(e) => {
+          handleMapInteraction();
           if (isDrawingMode) {
             handleMapPress(e);
           } else if (isDrawing) {
             const newPoint = e.nativeEvent.coordinate;
             setPolygonPoints([...polygonPoints, newPoint]);
           } else {
-            selectedLead.current = null;
-            setDummyRender((prev) => !prev);
             setShowNewLeadButton(false);
           }
         }}
+        onPanDrag={handleMapInteraction}
         onLongPress={(e) => {
+          handleMapInteraction();
           if (!isDrawing && !isDrawingMode) {
             const { coordinate } = e.nativeEvent;
             setNewLeadCoordinate(coordinate);
@@ -1536,7 +1535,10 @@ export default function Tab() {
         }}
         moveOnMarkerPress={false}
         showsUserLocation={locationPermission}
-        scrollEnabled={!isDrawing && !isDrawingMode}
+        scrollEnabled={!isDrawing && !isDrawingMode && !isModalOpen}
+        zoomEnabled={!isModalOpen}
+        rotateEnabled={!isModalOpen}
+        pitchEnabled={!isModalOpen}
         mapType={isSatellite ? 'satellite' : 'standard'}
         showsMyLocationButton={false}
         onMapReady={() => setIsMapReady(true)}
@@ -2718,75 +2720,113 @@ export default function Tab() {
 
   async function deleteLead() {
     if (!recentLead.current?.id) {
-      console.error('No lead selected for deletion');
-      return;
+        console.error('No lead selected for deletion');
+        return;
     }
     
     // Show confirmation dialog
     Alert.alert(
-      "Delete Lead",
-      "Are you sure you want to delete this lead and it's associated data? This action cannot be undone.",
-      [
-        {
-          text: "Cancel",
-          style: "cancel"
-        },
-        {
-          text: "Delete",
-          style: "destructive",
-          onPress: async () => {
-            try {
-              // First delete related notes
-              const { error: notesError } = await supabase
-                .from('notes')
-                .delete()
-                .eq('lead_id', recentLead.current.id);
+        "Delete Lead",
+        "Are you sure you want to delete this lead and it's associated data? This action cannot be undone.",
+        [
+            {
+                text: "Cancel",
+                style: "cancel"
+            },
+            {
+                text: "Delete",
+                style: "destructive",
+                onPress: async () => {
+                    try {
+                        setLoading(true, 'Deleting lead...');
+                        // First delete related notes
+                        const { error: notesError } = await supabase
+                            .from('notes')
+                            .delete()
+                            .eq('lead_id', recentLead.current.id);
 
-              if (notesError) {
-                console.error('Error deleting notes:', notesError);
-                Alert.alert('Error', 'Failed to delete lead notes');
-                return;
-              }
+                        if (notesError) {
+                            console.error('Error deleting notes:', notesError);
+                            Alert.alert('Error', 'Failed to delete lead notes');
+                            return;
+                        }
 
-              // Then delete lead-territory relationships
-              const { error: joinError } = await supabase
-                .from('leads_join_territories')
-                .delete()
-                .eq('lead_id', recentLead.current.id);
+                        // Then delete lead-territory relationships
+                        const { error: joinError } = await supabase
+                            .from('leads_join_territories')
+                            .delete()
+                            .eq('lead_id', recentLead.current.id);
 
-              if (joinError) {
-                console.error('Error deleting lead-territory relationships:', joinError);
-                Alert.alert('Error', 'Failed to delete lead-territory relationships');
-                return;
-              }
+                        if (joinError) {
+                            console.error('Error deleting lead-territory relationships:', joinError);
+                            Alert.alert('Error', 'Failed to delete lead-territory relationships');
+                            return;
+                        }
 
-              // Finally delete the lead itself
-              const { error: leadError } = await supabase
-                .from('leads')
-                .delete()
-                .eq('id', recentLead.current.id);
+                        // Finally delete the lead itself
+                        const { error: leadError } = await supabase
+                            .from('leads')
+                            .delete()
+                            .eq('id', recentLead.current.id);
 
-              if (leadError) {
-                console.error('Error deleting lead:', leadError);
-                Alert.alert('Error', 'Failed to delete lead');
-                return;
-              }
+                        if (leadError) {
+                            console.error('Error deleting lead:', leadError);
+                            Alert.alert('Error', 'Failed to delete lead');
+                            return;
+                        }
 
-              // Close the big menu and refresh the leads list
-              closeBigMenu();
-              fetchLeads();
-            } catch (error) {
-              console.error('Error in deleteLead:', error);
-              Alert.alert('Error', 'An unexpected error occurred while deleting the lead');
+                        // Close the big menu and refresh the leads list
+                        closeBigMenu();
+                        await fetchLeads();
+                    } catch (error) {
+                        console.error('Error in deleteLead:', error);
+                        Alert.alert('Error', 'An unexpected error occurred while deleting the lead');
+                    } finally {
+                        setLoading(false);
+                    }
+                }
             }
-          }
-        }
-      ]
+        ]
     );
   }
 
+  // Add this near the end of your component, just before the final return statement
+  const renderLoadingOverlay = () => {
+    if (!isLoading) return null;
+
+    return (
+      <View 
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+        }}
+      >
+        <View 
+          style={{
+            backgroundColor: 'white',
+            padding: 20,
+            borderRadius: 10,
+            alignItems: 'center',
+          }}
+        >
+          <ActivityIndicator size="large" color="#0000ff" />
+          {loadingMessage ? (
+            <Text style={{ marginTop: 10, color: '#333' }}>{loadingMessage}</Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
   return (
-    <View className="flex-1 w-full h-full">
+    <View style={{ flex: 1 }}>
       {memoizedMap}
       {renderStatusMenu()}
       {renderNoteModal()}
@@ -3589,6 +3629,7 @@ export default function Tab() {
       </TouchableOpacity>
     )}
 
+    {renderLoadingOverlay()}
   </View>
 );
 }
