@@ -29,7 +29,7 @@ const CREDENTIAL_TYPE_KEY = 'CREDENTIAL_TYPE';
 
 const { width, height } = Dimensions.get('window');
 const MAP_DIMENSIONS = { width, height };
-const BUFFER_FACTOR = 2;
+const BUFFER_FACTOR = 1.5; // Reduced buffer factor for better performance with many pins
 
 export default function Tab() {
   const { supabase } = useSupabase();
@@ -230,11 +230,9 @@ export default function Tab() {
     if (!userData?.user) return;
     
     try {
-      setLoading(true, 'Loading leads...');
-      // Add loading state
-      setIsLoading(true);
+      setLoading(true, 'Loading territories...');
       
-      // Fetch only essential data first
+      // Step 1: Get user territories (this should be fast)
       const { data: userTerritories, error: userTerritoriesError } = await supabase
           .from('users_join_territories')
           .select('territory_id')
@@ -242,6 +240,7 @@ export default function Tab() {
       
       if (userTerritoriesError) {
           console.error('Error fetching user territories:', userTerritoriesError);
+        setLeads([]);
           return;
       }
       
@@ -251,47 +250,115 @@ export default function Tab() {
           return;
       }
       
-      // Fetch leads in smaller chunks
       const territoryIds = userTerritories.map(territory => territory.territory_id);
-      const chunkSize = 50; // Smaller chunks for better performance
-      let allLeads = [];
+      setLoading(true, 'Finding leads...');
       
-      for (let i = 0; i < territoryIds.length; i += chunkSize) {
-          const chunk = territoryIds.slice(i, i + chunkSize);
+      // Step 2: Get all lead IDs in parallel chunks of territories
+      const territoryChunkSize = 20; // Process territories in parallel
+      const territoryChunks = [];
+      for (let i = 0; i < territoryIds.length; i += territoryChunkSize) {
+        territoryChunks.push(territoryIds.slice(i, i + territoryChunkSize));
+      }
           
-          // Get leads for this chunk of territories
-          const { data: territoryLeads, error: territoryLeadsError } = await supabase
+      // Fetch lead IDs from all territory chunks in parallel
+      const leadIdPromises = territoryChunks.map(async (territoryChunk) => {
+        try {
+          const { data: territoryLeads, error } = await supabase
               .from('leads_join_territories')
               .select('lead_id')
-              .in('territory_id', chunk);
+            .in('territory_id', territoryChunk);
               
-          if (territoryLeadsError) {
-              console.error('Error fetching territory leads chunk:', territoryLeadsError);
-              continue;
+          if (error) {
+            console.error('Error fetching leads for territory chunk:', error);
+            return [];
           }
           
-          if (territoryLeads && territoryLeads.length > 0) {
-              const leadIds = territoryLeads.map(lead => lead.lead_id);
-              
-              // Fetch lead details for this chunk
-              const { data: leads, error: leadsError } = await supabase
-                  .from('leads')
-                  .select('id, location, status, knocks, user_id')
-                  .in('id', leadIds);
-                  
-              if (leadsError) {
-                  console.error('Error fetching leads chunk:', leadsError);
-                  continue;
-              }
-              
-              if (leads) {
-                  allLeads = [...allLeads, ...leads];
-              }
+          return territoryLeads?.map(lead => lead.lead_id) || [];
+        } catch (error) {
+          console.error('Error in territory chunk processing:', error);
+          return [];
           }
+      });
+      
+      const leadIdArrays = await Promise.all(leadIdPromises);
+      const allLeadIds = [...new Set(leadIdArrays.flat())]; // Remove duplicates
+      
+      console.log(`Found ${allLeadIds.length} unique leads to fetch`);
+      
+      if (allLeadIds.length === 0) {
+        setLeads([]);
+        return;
       }
       
-      // Format leads for the map
-      const formattedLeads = allLeads.map((lead) => ({
+      setLoading(true, `Loading ${allLeadIds.length} leads...`);
+      
+      // Step 3: Fetch lead data in optimized parallel chunks
+      const leadChunkSize = 200; // Smaller chunks for better reliability
+      const parallelLimit = 5; // Limit concurrent requests to avoid overwhelming the database
+      const allLeads = [];
+      let processedLeads = 0;
+      
+      // Create chunks of lead IDs
+      const leadChunks = [];
+      for (let i = 0; i < allLeadIds.length; i += leadChunkSize) {
+        leadChunks.push(allLeadIds.slice(i, i + leadChunkSize));
+      }
+      
+      // Process chunks with controlled parallelism
+      for (let i = 0; i < leadChunks.length; i += parallelLimit) {
+        const currentBatch = leadChunks.slice(i, i + parallelLimit);
+        
+        const batchPromises = currentBatch.map(async (leadChunk, chunkIndex) => {
+          try {
+            // Add retry logic for individual chunks
+            let attempts = 0;
+            const maxAttempts = 3;
+            
+            while (attempts < maxAttempts) {
+              try {
+                const { data: leads, error } = await supabase
+                  .from('leads')
+                  .select('id, location, status, knocks, user_id')
+                  .in('id', leadChunk);
+                  
+                if (error) {
+                  throw error;
+                }
+                
+                processedLeads += leadChunk.length;
+                setLoading(true, `Loaded ${processedLeads}/${allLeadIds.length} leads...`);
+                
+                return leads || [];
+              } catch (chunkError) {
+                attempts++;
+                console.error(`Attempt ${attempts} failed for lead chunk:`, chunkError);
+                
+                if (attempts >= maxAttempts) {
+                  console.error(`Failed to fetch lead chunk after ${maxAttempts} attempts:`, chunkError);
+                  return []; // Return empty array instead of failing completely
+                }
+                
+                // Wait before retry (exponential backoff)
+                await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempts) * 1000));
+              }
+            }
+            
+            return [];
+          } catch (error) {
+            console.error('Unexpected error in lead chunk processing:', error);
+            return [];
+          }
+        });
+        
+        try {
+          const batchResults = await Promise.all(batchPromises);
+          allLeads.push(...batchResults.flat());
+          
+          // Progressive update: Update UI with leads as they come in
+          if (allLeads.length > 0 && i % 2 === 0) { // Update every 2 batches
+            const formattedLeads = allLeads
+              .filter(lead => lead && lead.location?.coordinates)
+              .map((lead) => ({
           ...lead,
           latitude: lead.location?.coordinates?.[1],
           longitude: lead.location?.coordinates?.[0],
@@ -299,10 +366,37 @@ export default function Tab() {
       }));
       
       setLeads(formattedLeads);
-      console.log(`Successfully loaded ${formattedLeads.length} leads`);
+          }
+        } catch (batchError) {
+          console.error('Error processing batch:', batchError);
+          // Continue with next batch instead of failing completely
+        }
+      }
+      
+      // Final formatting and filtering
+      const formattedLeads = allLeads
+        .filter(lead => lead && lead.location?.coordinates) // Filter out invalid leads
+        .map((lead) => ({
+          ...lead,
+          latitude: lead.location?.coordinates?.[1],
+          longitude: lead.location?.coordinates?.[0],
+          isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
+        }));
+      
+      setLeads(formattedLeads);
+      console.log(`Successfully loaded ${formattedLeads.length} leads out of ${allLeadIds.length} total`);
+      
+      // Show success message for large datasets
+      if (formattedLeads.length > 1000) {
+        console.log(`🎉 Successfully loaded ${formattedLeads.length} leads! App optimized for large datasets.`);
+      }
       
     } catch (error) {
       console.error('Unexpected error fetching leads:', error);
+      // Don't clear leads on error - keep whatever we have
+      if (leads.length === 0) {
+        setLeads([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -387,7 +481,18 @@ export default function Tab() {
     setRegion(newRegion);
     saveMapState(newRegion);
 
+    // Optimize clustering based on zoom level and lead count
+    const leadCount = leads.length;
+    if (leadCount > 5000) {
+      // For very large datasets, use more aggressive clustering
+      setIsClustering(newRegion.latitudeDelta >= 0.05);
+    } else if (leadCount > 1000) {
+      // For large datasets, use moderate clustering
+      setIsClustering(newRegion.latitudeDelta >= 0.08);
+    } else {
+      // For smaller datasets, use original clustering
     setIsClustering(newRegion.latitudeDelta >= 0.1);
+    }
   }
 
   function getPinColor(status, isTeamLead) {
@@ -955,8 +1060,18 @@ export default function Tab() {
     if (!region) return [];
     const { latitude, longitude, latitudeDelta, longitudeDelta } = region;
 
-    const bufferedLatDelta = latitudeDelta * BUFFER_FACTOR;
-    const bufferedLngDelta = longitudeDelta * BUFFER_FACTOR;
+    // Optimize buffer based on number of leads
+    const leadCount = leads.length;
+    let bufferFactor = BUFFER_FACTOR;
+    
+    if (leadCount > 5000) {
+      bufferFactor = 1.2; // Smaller buffer for very large datasets
+    } else if (leadCount > 1000) {
+      bufferFactor = 1.3; // Moderate buffer for large datasets
+    }
+
+    const bufferedLatDelta = latitudeDelta * bufferFactor;
+    const bufferedLngDelta = longitudeDelta * bufferFactor;
 
     const minLat = latitude - bufferedLatDelta / 2;
     const maxLat = latitude + bufferedLatDelta / 2;
@@ -987,20 +1102,44 @@ export default function Tab() {
         knocks: lead.knocks || 0,
         latitude: lead.latitude,
         longitude: lead.longitude,
+        isTeamLead: lead.isTeamLead || false,
       },
     }));
   }, [visibleLeads]);
+
+  // Optimize clustering parameters based on dataset size
+  const getClusteringOptions = useMemo(() => {
+    const leadCount = leads.length;
+    
+    if (leadCount > 5000) {
+      return {
+        minZoom: 0,
+        maxZoom: 15,
+        minPoints: 3, // Cluster more aggressively
+        radius: 50,   // Larger radius for more clustering
+      };
+    } else if (leadCount > 1000) {
+      return {
+        minZoom: 0,
+        maxZoom: 14,
+        minPoints: 2,
+        radius: 45,
+      };
+    } else {
+      return {
+      minZoom: 0,
+      maxZoom: 12,
+      minPoints: 2,
+      radius: 40,
+      };
+    }
+  }, [leads.length]);
 
   const [clusteredPoints, supercluster] = useClusterer(
     isClustering ? geoJSONLeads : [],
     MAP_DIMENSIONS,
     region,
-    {
-      minZoom: 0,
-      maxZoom: 12,
-      minPoints: 2,
-      radius: 40,
-    }
+    getClusteringOptions
   );
 
   function renderStatusMenu() {
@@ -1498,6 +1637,108 @@ export default function Tab() {
     setDummyRender((prev) => !prev);
   }
 
+  // Add this near the end of your component, just before the final return statement
+  const renderLoadingOverlay = () => {
+    if (!isLoading) return null;
+
+    return (
+      <View 
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.5)',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+        }}
+      >
+        <View 
+          style={{
+            backgroundColor: 'white',
+            padding: 20,
+            borderRadius: 10,
+            alignItems: 'center',
+          }}
+        >
+          <ActivityIndicator size="large" color="#0000ff" />
+          {loadingMessage ? (
+            <Text style={{ marginTop: 10, color: '#333' }}>{loadingMessage}</Text>
+          ) : null}
+        </View>
+      </View>
+    );
+  };
+
+  // Optimize marker rendering for large datasets
+  const renderMapMarkers = useMemo(() => {
+    if (isClustering) {
+      return clusteredPoints.map((point) => {
+        if (point.properties.cluster) {
+          const { cluster_id, point_count } = point.properties;
+          const coordinate = {
+            latitude: point.geometry.coordinates[1],
+            longitude: point.geometry.coordinates[0],
+          };
+
+          return (
+            <Marker
+              key={`cluster-${cluster_id}`}
+              coordinate={coordinate}
+              onPress={() => {
+                const expansionZoom = supercluster.getClusterExpansionZoom(cluster_id);
+                const newRegion = {
+                  latitude: coordinate.latitude,
+                  longitude: coordinate.longitude,
+                  latitudeDelta: Math.max(initialRegion.latitudeDelta / 2, 0.005),
+                  longitudeDelta: Math.max(initialRegion.longitudeDelta / 2, 0.005),
+                };
+                mapRef.current.animateToRegion(newRegion, 500);
+              }}
+            >
+              <View className="w-10 h-10 rounded-full bg-blue-500 justify-center items-center">
+                <Text className="text-white font-bold">
+                  {point_count >= 1000 ? '1000+' : point_count >= 250 ? '250+' : point_count}
+                </Text>
+              </View>
+            </Marker>
+          );
+        }
+
+        const lead = point.properties;
+        return (
+          <Marker
+            key={`${lead.id}-${lead.status}`}
+            coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+            pinColor={getPinColor(lead.status, lead.isTeamLead)}
+            onPress={(event) => showMenu(lead, event)}
+            onLongPress={() => showBigMenu(lead)}
+            onDragStart={() => handleDragStart(lead)}
+            onDragEnd={(e) => handleDragEnd(lead, e)}
+            draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
+          />
+        );
+      });
+    } else {
+      // For non-clustered view, limit the number of markers rendered for performance
+      const markersToRender = visibleLeads.slice(0, 2000); // Limit to 2000 markers max
+      return markersToRender.map((lead) => (
+        <Marker
+          key={`${lead.id}-${lead.status}`}
+          coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+          pinColor={getPinColor(lead.status, lead.isTeamLead)}
+          onPress={(event) => showMenu(lead, event)}
+          onLongPress={() => showBigMenu(lead)}
+          onDragStart={() => handleDragStart(lead)}
+          onDragEnd={(e) => handleDragEnd(lead, e)}
+          draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
+        />
+      ));
+    }
+  }, [clusteredPoints, visibleLeads, isClustering, isManager, managerModeEnabled]);
+
   const memoizedMap = useMemo(
     () => (
       <MapView
@@ -1541,6 +1782,11 @@ export default function Tab() {
         mapType={isSatellite ? 'satellite' : 'standard'}
         showsMyLocationButton={false}
         onMapReady={() => setIsMapReady(true)}
+        // Optimize map performance for large datasets
+        showsPointsOfInterest={leads.length < 1000} // Disable POI for large datasets
+        showsBuildings={leads.length < 1000} // Disable buildings for large datasets
+        showsTraffic={false} // Always disable traffic for better performance
+        toolbarEnabled={false} // Disable toolbar for better performance
       >
         {/* Render team territories when manager mode is enabled */}
         {isManager && managerModeEnabled && teamTerritories.map((territory) => (
@@ -1585,64 +1831,9 @@ export default function Tab() {
           </Marker>
         ))}
         
-        {isClustering
-          ? clusteredPoints.map((point) => {
-              if (point.properties.cluster) {
-                const { cluster_id, point_count } = point.properties;
-                const coordinate = {
-                  latitude: point.geometry.coordinates[1],
-                  longitude: point.geometry.coordinates[0],
-                };
+        {/* Render optimized markers */}
+        {renderMapMarkers}
 
-                return (
-                  <Marker
-                    key={`cluster-${cluster_id}`}
-                    coordinate={coordinate}
-                    onPress={() => {
-                      const expansionZoom = supercluster.getClusterExpansionZoom(cluster_id);
-                      const newRegion = {
-                        latitude: coordinate.latitude,
-                        longitude: coordinate.longitude,
-                        latitudeDelta: Math.max(initialRegion.latitudeDelta / 2, 0.005),
-                        longitudeDelta: Math.max(initialRegion.longitudeDelta / 2, 0.005),
-                      };
-                      mapRef.current.animateToRegion(newRegion, 500);
-                    }}
-                  >
-                    <View className="w-10 h-10 rounded-full bg-blue-500 justify-center items-center">
-                      <Text className="text-white font-bold">{point_count}</Text>
-                    </View>
-                  </Marker>
-                );
-              }
-
-              const lead = point.properties;
-
-              return (
-                <Marker
-                  key={`${lead.id}-${lead.status}`} // Include status in the key
-                  coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-                  pinColor={getPinColor(lead.status, lead.isTeamLead)}
-                  onPress={(event) => showMenu(lead, event)}
-                  onLongPress={() => showBigMenu(lead)}
-                  onDragStart={() => handleDragStart(lead)}
-                  onDragEnd={(e) => handleDragEnd(lead, e)}
-                  draggable={true}
-                />
-              );
-            })
-          : visibleLeads.map((lead) => (
-              <Marker
-                key={`${lead.id}-${lead.status}`}
-                coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-                pinColor={getPinColor(lead.status, lead.isTeamLead)}
-                onPress={(event) => showMenu(lead, event)}
-                onLongPress={() => showBigMenu(lead)}
-                onDragStart={() => handleDragStart(lead)}
-                onDragEnd={(e) => handleDragEnd(lead, e)}
-                draggable={true}
-              />
-            ))}
         {polygonPoints.length > 0 && (
           <Polygon
             coordinates={polygonPoints}
@@ -1655,18 +1846,17 @@ export default function Tab() {
     ),
     [
       initialRegion,
-      clusteredPoints,
+      renderMapMarkers, // Use the memoized markers
       polygonPoints,
       locationPermission,
-      isClustering,
-      visibleLeads,
       isSatellite,
       teamTerritories,
       isManager,
       managerModeEnabled,
       isDrawingMode,
       polygonCoordinates,
-      territoryColor
+      territoryColor,
+      leads.length, // Add this to re-render when lead count changes significantly
     ]
   );
 
@@ -2788,41 +2978,6 @@ export default function Tab() {
         ]
     );
   }
-
-  // Add this near the end of your component, just before the final return statement
-  const renderLoadingOverlay = () => {
-    if (!isLoading) return null;
-
-    return (
-      <View 
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000,
-        }}
-      >
-        <View 
-          style={{
-            backgroundColor: 'white',
-            padding: 20,
-            borderRadius: 10,
-            alignItems: 'center',
-          }}
-        >
-          <ActivityIndicator size="large" color="#0000ff" />
-          {loadingMessage ? (
-            <Text style={{ marginTop: 10, color: '#333' }}>{loadingMessage}</Text>
-          ) : null}
-        </View>
-      </View>
-    );
-  };
 
   return (
     <View style={{ flex: 1 }}>
