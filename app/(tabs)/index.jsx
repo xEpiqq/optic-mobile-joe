@@ -1263,8 +1263,7 @@ export default function Tab() {
           last_name: '',
           email: '',
           phone: '',
-          dob: '',
-          territory: null
+          dob: ''
         }])
         .select()
         .single();
