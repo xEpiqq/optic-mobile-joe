@@ -112,6 +112,7 @@ export default function Tab() {
   const [loadingMessage, setLoadingMessage] = useState('');
   const [selectedLeadId, setSelectedLeadId] = useState(null);  // Add this new state
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isMarkerLongPressing, setIsMarkerLongPressing] = useState(false);
 
   // normal stuff + fetch credential type
   useEffect(() => {
@@ -636,11 +637,19 @@ export default function Tab() {
       return;
     }
     
+    // Set flag to prevent map long press from firing
+    setIsMarkerLongPressing(true);
+    
     selectedLead.current = lead;
     setSelectedLeadId(lead.id);  // Set the selected lead ID
     setBigMenu(true);
     setIsModalOpen(true);
     handleDragStart(lead);
+    
+    // Clear the flag after a short delay
+    setTimeout(() => {
+      setIsMarkerLongPressing(false);
+    }, 100);
   }
 
   function closeBigMenu() {
@@ -686,13 +695,24 @@ export default function Tab() {
   }
 
   async function addNote() {
-    if (!selectedLeadId) {
-      console.error('No lead selected for note');
+    console.log('🔍 Starting addNote function...');
+    
+    // Check both state and ref for selected lead
+    const leadId = selectedLeadId || selectedLead.current?.id;
+    console.log('📍 Selected lead ID:', leadId);
+    
+    if (!leadId) {
+      console.error('❌ No lead selected for note');
       return;
     }
 
     const trimmedNote = noteText.trim();
-    if (trimmedNote === '') return;
+    console.log('📝 Note text length:', trimmedNote.length);
+    
+    if (trimmedNote === '') {
+      console.log('⚠️ Note text is empty, returning');
+      return;
+    }
 
     // Store the note locally first
     const newNote = { 
@@ -707,24 +727,66 @@ export default function Tab() {
 
     try {
         setLoading(true, 'Adding note...');
-        const { data: userData } = await supabase.auth.getUser();
-        if (!userData?.user) return;
+        
+        // Check authentication
+        console.log('🔐 Checking authentication...');
+        const { data: userData, error: authError } = await supabase.auth.getUser();
+        
+        if (authError) {
+          console.error('❌ Auth error:', authError);
+          Alert.alert('Authentication Error', `Please log in again: ${authError.message}`);
+          setRecentNote(null);
+          return;
+        }
+        
+        if (!userData?.user) {
+          console.error('❌ No user found in session');
+          Alert.alert('Authentication Error', 'No user session found. Please log in again.');
+          setRecentNote(null);
+          return;
+        }
+        
+        console.log('✅ User authenticated:', userData.user.id);
+        console.log('📊 Database insert payload:', {
+          lead_id: leadId,
+          note: trimmedNote.substring(0, 50) + '...', // Log first 50 chars
+          created_by: userData.user.id,
+        });
 
-        const { error } = await supabase.from('notes').insert({
-            lead_id: selectedLeadId,  // Use the state instead of ref
+        const { data: insertResult, error } = await supabase.from('notes').insert({
+            lead_id: leadId,
             note: trimmedNote,
             created_by: userData.user.id,
         });
 
         if (error) {
+            console.error('❌ Database error adding note:', error);
+            console.error('🔍 Error code:', error.code);
+            console.error('🔍 Error details:', error.details);
+            console.error('🔍 Error hint:', error.hint);
+            console.error('🔍 Full error object:', JSON.stringify(error, null, 2));
+            
             setRecentNote(null);
-            console.error('Error adding note:', error);
+            
+            // Show specific error messages based on error type
+            if (error.code === '42501') {
+              Alert.alert('Permission Error', 'You do not have permission to add notes. Please contact your administrator.');
+            } else if (error.code === '23503') {
+              Alert.alert('Database Error', 'Invalid lead reference. Please refresh and try again.');
+            } else {
+              Alert.alert('Error', `Failed to save note: ${error.message}`);
+            }
+        } else {
+            console.log('✅ Note saved successfully!');
+            console.log('📊 Insert result:', insertResult);
         }
     } catch (error) {
+        console.error('❌ Unexpected error adding note:', error);
         setRecentNote(null);
-        console.error('Error adding note:', error);
+        Alert.alert('Error', `An unexpected error occurred: ${error.message}`);
     } finally {
         setLoading(false);
+        console.log('🏁 Finished addNote function');
     }
   }
 
@@ -1635,6 +1697,9 @@ export default function Tab() {
     setLeadAddress(null);
     setMenuPosition({ x: 0, y: 0 });
     setDummyRender((prev) => !prev);
+    
+    // Clear marker long press flag
+    setIsMarkerLongPressing(false);
   }
 
   // Add this near the end of your component, just before the final return statement
@@ -1764,7 +1829,7 @@ export default function Tab() {
         onPanDrag={handleMapInteraction}
         onLongPress={(e) => {
           handleMapInteraction();
-          if (!isDrawing && !isDrawingMode) {
+          if (!isDrawing && !isDrawingMode && !isMarkerLongPressing) {
             const { coordinate } = e.nativeEvent;
             setNewLeadCoordinate(coordinate);
             mapRef.current.pointForCoordinate(coordinate).then((point) => {
