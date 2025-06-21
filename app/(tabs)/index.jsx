@@ -652,7 +652,35 @@ export default function Tab() {
     }, 100);
   }
 
-  function closeBigMenu() {
+  async function saveLeadData() {
+    if (!recentLead.current?.id) return;
+
+    try {
+      const { error } = await supabase
+        .from('leads')
+        .update({
+          first_name: firstName.current.trim(),
+          last_name: lastName.current.trim(),
+          email: email.current.trim(),
+          phone: phone.current.trim(),
+          dob: dob.current.trim(),
+        })
+        .eq('id', recentLead.current.id);
+
+      if (error) {
+        console.error('Error saving lead data:', error);
+      } else {
+        console.log('Lead data saved successfully');
+      }
+    } catch (error) {
+      console.error('Unexpected error saving lead data:', error);
+    }
+  }
+
+  async function closeBigMenu() {
+    // Save the lead data before closing
+    await saveLeadData();
+    
     setBigMenu(false);
     selectedLead.current = null;
     setSelectedLeadId(null);  // Clear the selected lead ID
@@ -832,18 +860,8 @@ export default function Tab() {
     asapZip.current = data.zip5;
     asapCity.current = data.city;
 
-    const { error: insertError } = await supabase
-      .from('leads')
-      .update({
-        first_name: firstName.current.trim(),
-        last_name: lastName.current.trim(),
-        email: email.current.trim(),
-        phone: phone.current.trim(),
-        dob: dob.current.trim(),
-      })
-      .eq('id', recentLead.current.id);
-
-    if (insertError) console.error('Error inserting lead information:', insertError);
+    // Save lead data using the new function
+    await saveLeadData();
   }
 
   function injectLogin() {
@@ -1826,7 +1844,7 @@ export default function Tab() {
             setShowNewLeadButton(false);
           }
         }}
-        onPanDrag={handleMapInteraction}
+
         onLongPress={(e) => {
           handleMapInteraction();
           if (!isDrawing && !isDrawingMode && !isMarkerLongPressing) {
