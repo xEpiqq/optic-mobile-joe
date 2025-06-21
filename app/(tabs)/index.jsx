@@ -569,8 +569,8 @@ export default function Tab() {
   }
 
   function showFullNotesModal(leadId) {
-    setIsModalOpen(true);
     setIsFullNotesModalVisible(true);
+    setIsModalOpen(true);
     fetchAllNotes(leadId);
   }
 
@@ -619,7 +619,7 @@ export default function Tab() {
     if (recentNote !== '') setRecentNote('');
     recentLead.current = lead;
     setSelectedLeadId(lead.id);
-    setIsModalOpen(true);
+    // Don't set isModalOpen for the status overlay - it should allow map scrolling
 
     const { coordinate } = event.nativeEvent;
     mapRef.current.pointForCoordinate(coordinate).then((point) => {
@@ -1303,6 +1303,7 @@ export default function Tab() {
             className="bg-blue-500 rounded-full py-2 px-3 shadow"
             onPress={() => {
               setIsNoteModalVisible(true);
+              setIsModalOpen(true);
             }}
             activeOpacity={0.7}
           >
@@ -1654,6 +1655,30 @@ export default function Tab() {
         }
       }
 
+      // Add the new lead to the existing leads state instead of refetching all leads
+      const newLeadForState = {
+        id: newLeadId,
+        latitude: newLeadCoordinate.latitude,
+        longitude: newLeadCoordinate.longitude,
+        location: {
+          type: 'Point',
+          coordinates: [newLeadCoordinate.longitude, newLeadCoordinate.latitude]
+        },
+        status: 0,
+        knocks: 0,
+        user_id: userData.user.id,
+        isTeamLead: false,
+        // Add other properties that might be needed
+        first_name: '',
+        last_name: '',
+        email: '',
+        phone: '',
+        dob: ''
+      };
+
+      // Add the new lead to the existing leads array
+      setLeads(prevLeads => [...prevLeads, newLeadForState]);
+      
       // Clear all state and close modal
       setShowNewLeadButton(false);
       setShowAddressValidation(false);
@@ -1662,9 +1687,6 @@ export default function Tab() {
       setNewLeadId(null);
       setNewLeadCoordinate(null);
       setValidationPosition({ x: 0, y: 0 });
-      
-      // Refresh leads list after everything is done
-      await fetchLeads();
     } catch (error) {
       console.error('Error in confirmLeadAddress:', error);
       // Still clear state even if there's an error
