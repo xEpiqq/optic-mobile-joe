@@ -113,6 +113,7 @@ export default function Tab() {
   const [selectedLeadId, setSelectedLeadId] = useState(null);  // Add this new state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isMarkerLongPressing, setIsMarkerLongPressing] = useState(false);
+  const [shouldAutoCenter, setShouldAutoCenter] = useState(true); // Track if we should auto-center on location
 
   // normal stuff + fetch credential type
   useEffect(() => {
@@ -139,12 +140,13 @@ export default function Tab() {
     };
   }, []);
 
-  // Center map on user location once available and map is ready
+  // Center map on user location once available and map is ready - only on initial load
   useEffect(() => {
-    if ((userLocation || optimisticLocation) && isMapReady && mapRef.current) {
+    if ((userLocation || optimisticLocation) && isMapReady && mapRef.current && shouldAutoCenter) {
       centerMapOnUserLocation();
+      setShouldAutoCenter(false); // Disable auto-centering after first time
     }
-  }, [userLocation, optimisticLocation, isMapReady]);
+  }, [userLocation, optimisticLocation, isMapReady, shouldAutoCenter]);
 
   useEffect(() => {
     const saveCredentialType = async () => {
@@ -637,7 +639,9 @@ export default function Tab() {
       return;
     }
     
-    // Set flag to prevent map long press from firing
+    console.log('showBigMenu called for lead:', lead.id);
+    
+    // Set flag to prevent map interactions from interfering
     setIsMarkerLongPressing(true);
     
     selectedLead.current = lead;
@@ -646,10 +650,11 @@ export default function Tab() {
     setIsModalOpen(true);
     handleDragStart(lead);
     
-    // Clear the flag after a short delay
+    // Clear the flag after the modal is properly opened
     setTimeout(() => {
       setIsMarkerLongPressing(false);
-    }, 100);
+      console.log('Marker long press flag cleared');
+    }, 500);
   }
 
   async function saveLeadData() {
@@ -685,6 +690,7 @@ export default function Tab() {
     selectedLead.current = null;
     setSelectedLeadId(null);  // Clear the selected lead ID
     setIsModalOpen(false);
+    setIsMarkerLongPressing(false); // Clear the marker long press flag
     firstName.current = '';
     lastName.current = '';
     phone.current = '';
@@ -1724,22 +1730,25 @@ export default function Tab() {
   }
 
   function handleMapInteraction() {
-    // Close all modals
-    setBigMenu(false);
+    // Don't interfere if we're in the middle of a marker long press or if big menu is open
+    if (isMarkerLongPressing || bigMenu) {
+      return;
+    }
+    
+    // Close all modals except big menu
     setIsNoteModalVisible(false);
     setIsFullNotesModalVisible(false);
     setIsModalOpen(false);
     
-    // Clear lead status
-    selectedLead.current = null;
-    setSelectedLeadId(null);
-    setRecentNote(null);
-    setLeadAddress(null);
-    setMenuPosition({ x: 0, y: 0 });
-    setDummyRender((prev) => !prev);
-    
-    // Clear marker long press flag
-    setIsMarkerLongPressing(false);
+    // Clear lead status only if big menu is not open
+    if (!bigMenu) {
+      selectedLead.current = null;
+      setSelectedLeadId(null);
+      setRecentNote(null);
+      setLeadAddress(null);
+      setMenuPosition({ x: 0, y: 0 });
+      setDummyRender((prev) => !prev);
+    }
   }
 
   // Add this near the end of your component, just before the final return statement
@@ -1852,24 +1861,31 @@ export default function Tab() {
         initialRegion={initialRegion}
         onRegionChangeComplete={(newRegion) => {
           onRegionChangeComplete(newRegion);
-          handleMapInteraction();
+          // Don't handle map interaction if we're in the middle of a marker operation
+          if (!isMarkerLongPressing && !bigMenu) {
+            handleMapInteraction();
+          }
         }}
         className="flex-1"
         onPress={(e) => {
-          handleMapInteraction();
-          if (isDrawingMode) {
-            handleMapPress(e);
-          } else if (isDrawing) {
-            const newPoint = e.nativeEvent.coordinate;
-            setPolygonPoints([...polygonPoints, newPoint]);
-          } else {
-            setShowNewLeadButton(false);
+          // Don't handle map press if big menu is open or marker long press is active
+          if (!bigMenu && !isMarkerLongPressing) {
+            handleMapInteraction();
+            if (isDrawingMode) {
+              handleMapPress(e);
+            } else if (isDrawing) {
+              const newPoint = e.nativeEvent.coordinate;
+              setPolygonPoints([...polygonPoints, newPoint]);
+            } else {
+              setShowNewLeadButton(false);
+            }
           }
         }}
 
         onLongPress={(e) => {
-          handleMapInteraction();
-          if (!isDrawing && !isDrawingMode && !isMarkerLongPressing) {
+          // Only handle map long press if we're not in a marker long press operation
+          if (!isDrawing && !isDrawingMode && !isMarkerLongPressing && !bigMenu) {
+            handleMapInteraction();
             const { coordinate } = e.nativeEvent;
             setNewLeadCoordinate(coordinate);
             mapRef.current.pointForCoordinate(coordinate).then((point) => {
