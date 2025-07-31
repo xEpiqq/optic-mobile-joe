@@ -535,6 +535,12 @@ export default function Tab() {
       prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
     );
 
+    // Also update the selected lead for immediate UI feedback
+    if (selectedLead.current && selectedLead.current.id === leadId) {
+      selectedLead.current = { ...selectedLead.current, status: newStatus };
+      setDummyRender((prev) => !prev); // Force re-render to update UI immediately
+    }
+
     try {
       const { error } = await supabase
         .from('leads')
@@ -546,6 +552,11 @@ export default function Tab() {
         setLeads((prevLeads) =>
           prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: previousStatus } : lead))
         );
+        // Also revert the selected lead
+        if (selectedLead.current && selectedLead.current.id === leadId) {
+          selectedLead.current = { ...selectedLead.current, status: previousStatus };
+          setDummyRender((prev) => !prev); // Force re-render for revert
+        }
         console.error('Error updating lead status:', error);
       }
     } catch (error) {
@@ -553,6 +564,11 @@ export default function Tab() {
       setLeads((prevLeads) =>
         prevLeads.map((lead) => (lead.id === leadId ? { ...lead, status: previousStatus } : lead))
       );
+      // Also revert the selected lead
+      if (selectedLead.current && selectedLead.current.id === leadId) {
+        selectedLead.current = { ...selectedLead.current, status: previousStatus };
+        setDummyRender((prev) => !prev); // Force re-render for revert
+      }
       console.error('Unexpected error updating lead status:', error);
     }
   }
@@ -577,18 +593,61 @@ export default function Tab() {
   }
 
   async function fetchAllNotes(leadId) {
-    const { data, error } = await supabase
+    // First, fetch the notes
+    const { data: notesData, error: notesError } = await supabase
       .from('notes')
-      .select('note, created_at')
+      .select('note, created_at, created_by')
       .eq('lead_id', leadId)
       .order('created_at', { ascending: false });
 
-    if (error) {
-      console.error('Error fetching all notes:', error);
+    if (notesError) {
+      console.error('Error fetching all notes:', notesError);
       setAllNotes([]);
-    } else {
-      setAllNotes(data);
+      return;
     }
+
+    if (!notesData || notesData.length === 0) {
+      setAllNotes([]);
+      return;
+    }
+
+    // Get unique user IDs from the notes
+    const userIds = [...new Set(notesData.map(note => note.created_by))].filter(Boolean);
+
+    if (userIds.length === 0) {
+      // If no user IDs, just set the notes without user info
+      setAllNotes(notesData.map(note => ({ ...note, profiles: null })));
+      return;
+    }
+
+    // Fetch user profiles for these IDs
+    const { data: profilesData, error: profilesError } = await supabase
+      .from('profiles')
+      .select('user_id, first_name, last_name')
+      .in('user_id', userIds);
+
+    if (profilesError) {
+      console.error('Error fetching user profiles:', profilesError);
+      // Still show notes, but without user info
+      setAllNotes(notesData.map(note => ({ ...note, profiles: null })));
+      return;
+    }
+
+    // Create a map of user_id to profile data
+    const profilesMap = {};
+    if (profilesData) {
+      profilesData.forEach(profile => {
+        profilesMap[profile.user_id] = profile;
+      });
+    }
+
+    // Combine notes with user profile data
+    const notesWithProfiles = notesData.map(note => ({
+      ...note,
+      profiles: profilesMap[note.created_by] || null
+    }));
+
+    setAllNotes(notesWithProfiles);
   }
 
 
@@ -620,6 +679,7 @@ export default function Tab() {
   function showMenu(lead, event) {
     if (recentNote !== '') setRecentNote('');
     recentLead.current = lead;
+    selectedLead.current = lead; // Set immediately for UI rendering
     setSelectedLeadId(lead.id);
     // Don't set isModalOpen for the status overlay - it should allow map scrolling
 
@@ -627,7 +687,6 @@ export default function Tab() {
     mapRef.current.pointForCoordinate(coordinate).then((point) => {
       const x = point.x - width / 2;
       const y = point.y - height / 2;
-      selectedLead.current = lead;
       fetchMostRecentNote(lead.id);
       fetchLeadAddress(lead.id);
       setMenuPosition({ x, y: y - 100 });
@@ -791,6 +850,7 @@ export default function Tab() {
             lead_id: leadId,
             note: trimmedNote,
             created_by: userData.user.id,
+            created_at: new Date().toISOString(),
         });
 
         if (error) {
@@ -1236,86 +1296,92 @@ export default function Tab() {
     return (
       <>
         {!bigMenu && (
-          <View>
-            {leadAddress && (
-              <View className="absolute bottom-0 right-0 z-50 p-2.5 px-3 bg-white rounded flex-row items-center">
-                <Text className="text-black font-bold text-base flex-1">{leadAddress}</Text>
-                {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
-                  <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-2">
-                    <Text className="text-white text-xs font-semibold">Team Lead</Text>
-                  </View>
-                )}
-                <TouchableOpacity onPress={openMaps} className="ml-2 p-1">
-                  <Image
-                    source={require('../../assets/images/navigation-icon.png')}
-                    className="w-5 h-5 tint-blue-500"
-                  />
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        )}
-        {recentNote && (
-          <View
-            className="bg-white rounded p-2.5 mb-2.5 shadow"
+          <View 
+            className="absolute bottom-0 left-0 right-0 bg-white rounded-t-xl shadow-lg z-50"
             style={{
-              position: 'absolute',
-              left: menuPosition.x + width / 2 - 150,
-              top: menuPosition.y + height / 2 - 60,
+              shadowColor: '#000',
+              shadowOffset: { width: 0, height: -2 },
+              shadowOpacity: 0.1,
+              shadowRadius: 8,
+              elevation: 8,
             }}
           >
-            <View className="flex-row items-center">
-              <Text className="text-xs text-gray-800">Recent Note: {recentNote.note}</Text>
-              <TouchableOpacity onPress={() => showFullNotesModal(selectedLead.current.id)}>
-                <Text className="text-blue-500 ml-1 text-lg font-bold">→</Text>
-              </TouchableOpacity>
+            {/* Address Section */}
+            {leadAddress && (
+              <View className="px-4 py-3 border-b border-gray-200">
+                <View className="flex-row items-center">
+                  <Text className="text-black font-bold text-base flex-1">{leadAddress}</Text>
+                  {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
+                    <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-3">
+                      <Text className="text-white text-xs font-semibold">Team Lead</Text>
+                    </View>
+                  )}
+                  <TouchableOpacity onPress={openMaps} className="p-2">
+                    <Image
+                      source={require('../../assets/images/navigation-icon.png')}
+                      className="w-5 h-5 tint-blue-500"
+                    />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Recent Note Section */}
+            {recentNote && (
+              <View className="px-4 py-2 border-b border-gray-200 bg-gray-50">
+                <View className="flex-row items-center">
+                  <Text className="text-xs text-gray-800 flex-1">Recent Note: {recentNote.note}</Text>
+                  <TouchableOpacity onPress={() => showFullNotesModal(selectedLead.current.id)}>
+                    <Text className="text-blue-500 ml-2 text-lg font-bold">→</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Status Options Section */}
+            <View className="px-4 py-3 border-b border-gray-200">
+              <View className="flex-row justify-around">
+                {statuses.map((status, index) => {
+                  const isCurrentStatus = selectedLead.current.status === index;
+                  return (
+                    <TouchableOpacity
+                      key={index}
+                      className={`items-center flex-1 mx-1 py-2 px-1 rounded-lg ${
+                        isCurrentStatus ? 'bg-gray-200' : 'bg-transparent'
+                      }`}
+                      onPress={() => {
+                        updateLeadStatus(selectedLead.current.id, index);
+                        // Remove the immediate modal closing - let handleMapInteraction handle it
+                      }}
+                    >
+                      <View 
+                        style={{ backgroundColor: colors[index] }} 
+                        className="h-4 w-full mb-2 rounded" 
+                      />
+                      <Text className="text-sm text-center font-medium text-gray-900">{status}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+            
+            {/* Note Actions Section */}
+            <View className="px-4 py-3">
+              <View className="flex-row justify-center">
+                <TouchableOpacity
+                  className="bg-blue-500 rounded-lg py-3 px-6 shadow-sm"
+                  onPress={() => {
+                    setIsNoteModalVisible(true);
+                    setIsModalOpen(true);
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Text className="text-white text-sm font-bold">+ Add Note</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
         )}
-        <View
-          className="bg-white rounded flex-row justify-around p-1.5 shadow w-75"
-          style={{
-            position: 'absolute',
-            left: menuPosition.x + width / 2 - 150,
-            top: menuPosition.y + height / 2,
-            zIndex: 1000,
-          }}
-        >
-          {statuses.map((status, index) => (
-            <TouchableOpacity
-              key={index}
-              className="p-2.5 items-center"
-              onPress={() => {
-                updateLeadStatus(selectedLead.current.id, index);
-                // Remove the immediate modal closing - let handleMapInteraction handle it
-              }}
-            >
-              <View style={{ backgroundColor: colors[index] }} className="h-0.5 w-full mb-0.5" />
-              <Text className="text-xs text-center mt-0.5">{status}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-        
-        {/* Note Button in separate View with high zIndex */}
-        <View
-          style={{
-            position: 'absolute',
-            left: menuPosition.x + width / 2 - 150, // Align with the left edge of status menu
-            top: menuPosition.y + height / 2 + 60, // Increased from 45 to 60 to move it lower
-            zIndex: 1001,
-          }}
-        >
-          <TouchableOpacity
-            className="bg-blue-500 rounded-full py-2 px-3 shadow"
-            onPress={() => {
-              setIsNoteModalVisible(true);
-              setIsModalOpen(true);
-            }}
-            activeOpacity={0.7}
-          >
-            <Text className="text-white text-sm font-bold">+Note</Text>
-          </TouchableOpacity>
-        </View>
       </>
     );
   }
@@ -1383,14 +1449,22 @@ export default function Tab() {
         <View className="flex-1 bg-white p-5 justify-start">
           <Text className="text-2xl font-bold mb-5 text-center text-gray-800">All Notes</Text>
           <ScrollView className="flex-1">
-            {allNotes.map((note, index) => (
-              <View key={index} className="p-3.5 border-b border-gray-300">
-                <Text className="text-base text-gray-800">{note.note}</Text>
-                <Text className="text-xs text-gray-500 mt-1.25">
-                  {new Date(note.created_at).toLocaleString()}
-                </Text>
-              </View>
-            ))}
+            {allNotes.map((note, index) => {
+              const userName = note.profiles ? `${note.profiles.first_name || ''} ${note.profiles.last_name || ''}`.trim() : 'Unknown User';
+              return (
+                <View key={index} className="p-3.5 border-b border-gray-300">
+                  <Text className="text-base text-gray-800">{note.note}</Text>
+                  <View className="flex-row justify-between items-center mt-1.25">
+                    <Text className="text-xs text-gray-500">
+                      {note.created_at ? new Date(note.created_at).toLocaleString() : 'No timestamp'}
+                    </Text>
+                    <Text className="text-xs text-gray-600 font-medium">
+                      - {userName}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
           </ScrollView>
           <TouchableOpacity
             className="bg-blue-500 py-3.5 rounded mt-5 items-center"

@@ -31,7 +31,7 @@
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.opticd2d.opticmobile",
+      "package": "com.opticd2d.optic",
       "config": {
         "googleMaps": {
           "apiKey": "AIzaSyBQR090L8y1TlPP075mX_O_Fx2axQQJmc8"
