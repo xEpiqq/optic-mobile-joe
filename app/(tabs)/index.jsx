@@ -53,6 +53,7 @@ export default function Tab() {
   const [isSatellite, setIsSatellite] = useState(false);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [noteText, setNoteText] = useState('');
+  const [inlineNoteText, setInlineNoteText] = useState('');
   const [recentNote, setRecentNote] = useState(null);
   const [leadAddress, setLeadAddress] = useState(null);
   const [isNoteModalVisible, setIsNoteModalVisible] = useState(false);
@@ -596,7 +597,7 @@ export default function Tab() {
     // First, fetch the notes
     const { data: notesData, error: notesError } = await supabase
       .from('notes')
-      .select('note, created_at, created_by')
+      .select('note, created_at, created_by, status')
       .eq('lead_id', leadId)
       .order('created_at', { ascending: false });
 
@@ -676,11 +677,17 @@ export default function Tab() {
     Linking.openURL(url).catch((err) => console.error('Failed to open map:', err));
   }
 
-  function showMenu(lead, event) {
+  async function showMenu(lead, event) {
+    // Auto-save inline note from previous lead before switching
+    if (selectedLead.current && inlineNoteText.trim() !== '') {
+      await autoSaveInlineNote();
+    }
+    
     if (recentNote !== '') setRecentNote('');
     recentLead.current = lead;
     selectedLead.current = lead; // Set immediately for UI rendering
     setSelectedLeadId(lead.id);
+    setInlineNoteText(''); // Clear inline note text for new lead
     // Don't set isModalOpen for the status overlay - it should allow map scrolling
 
     const { coordinate } = event.nativeEvent;
@@ -844,6 +851,7 @@ export default function Tab() {
           lead_id: leadId,
           note: trimmedNote.substring(0, 50) + '...', // Log first 50 chars
           created_by: userData.user.id,
+          status: selectedLead.current?.status || 0,
         });
 
         const { data: insertResult, error } = await supabase.from('notes').insert({
@@ -851,6 +859,7 @@ export default function Tab() {
             note: trimmedNote,
             created_by: userData.user.id,
             created_at: new Date().toISOString(),
+            status: selectedLead.current?.status || 0,
         });
 
         if (error) {
@@ -881,6 +890,87 @@ export default function Tab() {
     } finally {
         setLoading(false);
         console.log('🏁 Finished addNote function');
+    }
+  }
+
+  async function autoSaveInlineNote() {
+    console.log('🔍 Starting autoSaveInlineNote function...');
+    
+    // Check both state and ref for selected lead
+    const leadId = selectedLeadId || selectedLead.current?.id;
+    console.log('📍 Selected lead ID:', leadId);
+    
+    if (!leadId) {
+      console.log('❌ No lead selected for note');
+      return;
+    }
+
+    const trimmedNote = inlineNoteText.trim();
+    console.log('📝 Inline note text length:', trimmedNote.length);
+    
+    if (trimmedNote === '') {
+      console.log('⚠️ Inline note text is empty, nothing to save');
+      return;
+    }
+
+    // Store the note locally first
+    const newNote = { 
+        note: trimmedNote, 
+        created_at: new Date().toISOString() 
+    };
+    
+    // Update UI immediately
+    setRecentNote(newNote);
+    setInlineNoteText('');
+
+    try {
+        setLoading(true, 'Saving note...');
+        
+        // Check authentication
+        console.log('🔐 Checking authentication...');
+        const { data: userData, error: authError } = await supabase.auth.getUser();
+        
+        if (authError) {
+          console.error('❌ Auth error:', authError);
+          setRecentNote(null);
+          return;
+        }
+        
+        if (!userData?.user) {
+          console.error('❌ No user found in session');
+          setRecentNote(null);
+          return;
+        }
+        
+        console.log('✅ User authenticated:', userData.user.id);
+        console.log('📊 Database insert payload:', {
+          lead_id: leadId,
+          note: trimmedNote.substring(0, 50) + '...', // Log first 50 chars
+          created_by: userData.user.id,
+          status: selectedLead.current?.status || 0,
+        });
+
+        const { data: insertResult, error } = await supabase.from('notes').insert({
+            lead_id: leadId,
+            note: trimmedNote,
+            created_by: userData.user.id,
+            created_at: new Date().toISOString(),
+            status: selectedLead.current?.status || 0,
+        });
+
+        if (error) {
+            console.error('❌ Database error adding inline note:', error);
+            setRecentNote(null);
+        } else {
+            console.log('✅ Inline note saved successfully!');
+            console.log('📊 Insert result:', insertResult);
+        }
+    } catch (error) {
+        console.error('❌ Unexpected error adding inline note:', error);
+        setRecentNote(null);
+    } finally {
+        setLoading(false);
+        console.log('🏁 Finished autoSaveInlineNote function');
     }
   }
 
@@ -1187,16 +1277,33 @@ export default function Tab() {
     this.webref.injectJavaScript(script);
   }
 
-  function centerMapOnUserLocation() {
+  async function centerMapOnUserLocation() {
     const locationToUse = userLocation || optimisticLocation;
 
-    if (mapRef.current && locationToUse) {
-      mapRef.current.animateToRegion({
-        latitude: locationToUse.latitude,
-        longitude: locationToUse.longitude,
-        latitudeDelta: 0.05, // Use a closer zoom when centering on user
-        longitudeDelta: 0.05,
-      }, 1000); // Add duration for smoother animation
+    if (mapRef.current && locationToUse && region) {
+      try {
+        // Get current camera to preserve heading and pitch
+        const camera = await mapRef.current.getCamera();
+        
+        // Animate to new center while preserving orientation and zoom
+        mapRef.current.animateCamera({
+          center: {
+            latitude: locationToUse.latitude,
+            longitude: locationToUse.longitude,
+          },
+          heading: camera.heading, // Preserve current orientation
+          pitch: camera.pitch, // Preserve current tilt
+          zoom: camera.zoom, // Preserve current zoom level
+        }, { duration: 1000 });
+      } catch (error) {
+        // Fallback to animateToRegion if camera method fails
+        mapRef.current.animateToRegion({
+          latitude: locationToUse.latitude,
+          longitude: locationToUse.longitude,
+          latitudeDelta: region.latitudeDelta,
+          longitudeDelta: region.longitudeDelta,
+        }, 1000);
+      }
     } else {
       console.error('User location or map not available');
     }
@@ -1318,21 +1425,9 @@ export default function Tab() {
                   )}
                   <TouchableOpacity onPress={openMaps} className="p-2">
                     <Image
-                      source={require('../../assets/images/navigation-icon.png')}
-                      className="w-5 h-5 tint-blue-500"
+                      source={require('../../assets/images/directions.png')}
+                      className="w-7 h-7 tint-blue-500"
                     />
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            {/* Recent Note Section */}
-            {recentNote && (
-              <View className="px-4 py-2 border-b border-gray-200 bg-gray-50">
-                <View className="flex-row items-center">
-                  <Text className="text-xs text-gray-800 flex-1">Recent Note: {recentNote.note}</Text>
-                  <TouchableOpacity onPress={() => showFullNotesModal(selectedLead.current.id)}>
-                    <Text className="text-blue-500 ml-2 text-lg font-bold">→</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -1365,19 +1460,28 @@ export default function Tab() {
               </View>
             </View>
             
-            {/* Note Actions Section */}
+            {/* Inline Note Input Section */}
             <View className="px-4 py-3">
-              <View className="flex-row justify-center">
-                <TouchableOpacity
-                  className="bg-blue-500 rounded-lg py-3 px-6 shadow-sm"
-                  onPress={() => {
-                    setIsNoteModalVisible(true);
-                    setIsModalOpen(true);
-                  }}
-                  activeOpacity={0.7}
-                >
-                  <Text className="text-white text-sm font-bold">+ Add Note</Text>
-                </TouchableOpacity>
+              <Text className="text-xs text-gray-600 font-medium mb-2">Add Note:</Text>
+              <View className="flex-row items-start">
+                <View className="flex-1">
+                  <TextInput
+                    className="border border-gray-300 rounded-lg p-3 text-base bg-gray-50 min-h-20"
+                    multiline
+                    placeholder={recentNote ? `Recent Note: ${recentNote.note}` : "Add a note..."}
+                    value={inlineNoteText}
+                    onChangeText={setInlineNoteText}
+                    textAlignVertical="top"
+                  />
+                </View>
+                {recentNote && (
+                  <TouchableOpacity 
+                    onPress={() => showFullNotesModal(selectedLead.current.id)}
+                    className="ml-2 mt-3"
+                  >
+                    <Text className="text-blue-500 text-lg font-bold">→</Text>
+                  </TouchableOpacity>
+                )}
               </View>
             </View>
           </View>
@@ -1436,6 +1540,9 @@ export default function Tab() {
   }
 
   function renderFullNotesModal() {
+    const statuses = ['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'];
+    const colors = ['#800080', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
+    
     return (
       <Modal
         animationType="slide"
@@ -1451,16 +1558,42 @@ export default function Tab() {
           <ScrollView className="flex-1">
             {allNotes.map((note, index) => {
               const userName = note.profiles ? `${note.profiles.first_name || ''} ${note.profiles.last_name || ''}`.trim() : 'Unknown User';
+              const noteStatus = note.status !== null && note.status !== undefined ? note.status : null;
+              
               return (
                 <View key={index} className="p-3.5 border-b border-gray-300">
-                  <Text className="text-base text-gray-800">{note.note}</Text>
-                  <View className="flex-row justify-between items-center mt-1.25">
-                    <Text className="text-xs text-gray-500">
-                      {note.created_at ? new Date(note.created_at).toLocaleString() : 'No timestamp'}
-                    </Text>
-                    <Text className="text-xs text-gray-600 font-medium">
-                      - {userName}
-                    </Text>
+                  <View className="flex-row items-start">
+                    {/* Status Indicator */}
+                    <View className="mr-3 items-center">
+                      {noteStatus !== null ? (
+                        <>
+                          <View 
+                            style={{ backgroundColor: colors[noteStatus] }} 
+                            className="h-3 w-8 mb-1 rounded" 
+                          />
+                          <Text className="text-xs text-center font-medium text-gray-900">
+                            {statuses[noteStatus]}
+                          </Text>
+                        </>
+                      ) : (
+                        <View className="h-3 w-8 mb-1">
+                          {/* Empty space for notes without status */}
+                        </View>
+                      )}
+                    </View>
+                    
+                    {/* Note Content */}
+                    <View className="flex-1">
+                      <Text className="text-base text-gray-800">{note.note}</Text>
+                      <View className="flex-row justify-between items-center mt-1.25">
+                        <Text className="text-xs text-gray-500">
+                          {note.created_at ? new Date(note.created_at).toLocaleString() : 'No timestamp'}
+                        </Text>
+                        <Text className="text-xs text-gray-600 font-medium">
+                          - {userName}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
                 </View>
               );
@@ -1803,10 +1936,15 @@ export default function Tab() {
     }
   }
 
-  function handleMapInteraction() {
+  async function handleMapInteraction() {
     // Don't interfere if we're in the middle of a marker long press or if big menu is open
     if (isMarkerLongPressing || bigMenu) {
       return;
+    }
+    
+    // Auto-save inline note before closing menu
+    if (selectedLead.current && inlineNoteText.trim() !== '') {
+      await autoSaveInlineNote();
     }
     
     // Close all modals except big menu
@@ -1821,6 +1959,7 @@ export default function Tab() {
       setRecentNote(null);
       setLeadAddress(null);
       setMenuPosition({ x: 0, y: 0 });
+      setInlineNoteText(''); // Clear inline note text
       setDummyRender((prev) => !prev);
     }
   }
