@@ -296,7 +296,38 @@ export default function Tab() {
       
       setLoading(true, `Loading ${allLeadIds.length} leads...`);
       
-      // Step 3: Fetch lead data in optimized parallel chunks
+      // Step 3: Fetch recent notes for all leads in parallel
+      const notesPromise = (async () => {
+        try {
+          const { data: allNotes, error } = await supabase
+            .from('notes')
+            .select('lead_id, note, created_at')
+            .in('lead_id', allLeadIds)
+            .order('created_at', { ascending: false });
+          
+          if (error) {
+            console.error('Error fetching notes:', error);
+            return {};
+          }
+          
+          // Group notes by lead_id and get the most recent one for each
+          const notesByLead = {};
+          if (allNotes) {
+            allNotes.forEach(note => {
+              if (!notesByLead[note.lead_id]) {
+                notesByLead[note.lead_id] = note;
+              }
+            });
+          }
+          
+          return notesByLead;
+        } catch (error) {
+          console.error('Error in notes fetching:', error);
+          return {};
+        }
+      })();
+      
+      // Step 4: Fetch lead data in optimized parallel chunks
       const leadChunkSize = 200; // Smaller chunks for better reliability
       const parallelLimit = 5; // Limit concurrent requests to avoid overwhelming the database
       const allLeads = [];
@@ -322,7 +353,7 @@ export default function Tab() {
               try {
                 const { data: leads, error } = await supabase
                   .from('leads')
-                  .select('id, location, status, knocks, user_id')
+                  .select('id, location, status, knocks, user_id, address, address2')
                   .in('id', leadChunk);
                   
                 if (error) {
@@ -366,7 +397,8 @@ export default function Tab() {
           ...lead,
           latitude: lead.location?.coordinates?.[1],
           longitude: lead.location?.coordinates?.[0],
-          isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
+          isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id,
+          fullAddress: `${lead.address || ''} ${lead.address2 || ''}`.trim()
       }));
       
       setLeads(formattedLeads);
@@ -377,6 +409,9 @@ export default function Tab() {
         }
       }
       
+      // Wait for notes to finish loading and merge with lead data
+      const notesByLead = await notesPromise;
+      
       // Final formatting and filtering
       const formattedLeads = allLeads
         .filter(lead => lead && lead.location?.coordinates) // Filter out invalid leads
@@ -384,7 +419,9 @@ export default function Tab() {
           ...lead,
           latitude: lead.location?.coordinates?.[1],
           longitude: lead.location?.coordinates?.[0],
-          isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id
+          isTeamLead: isManager && managerModeEnabled && lead.user_id !== userData.user.id,
+          fullAddress: `${lead.address || ''} ${lead.address2 || ''}`.trim(),
+          mostRecentNote: notesByLead[lead.id] || null
         }));
       
       setLeads(formattedLeads);
@@ -683,19 +720,19 @@ export default function Tab() {
       await autoSaveInlineNote();
     }
     
-    if (recentNote !== '') setRecentNote('');
     recentLead.current = lead;
     selectedLead.current = lead; // Set immediately for UI rendering
     setSelectedLeadId(lead.id);
     setInlineNoteText(''); // Clear inline note text for new lead
+    // Set address and recent note immediately so they render with the menu
+    setLeadAddress(lead.fullAddress || '');
+    setRecentNote(lead.mostRecentNote || null);
     // Don't set isModalOpen for the status overlay - it should allow map scrolling
 
     const { coordinate } = event.nativeEvent;
     mapRef.current.pointForCoordinate(coordinate).then((point) => {
       const x = point.x - width / 2;
       const y = point.y - height / 2;
-      fetchMostRecentNote(lead.id);
-      fetchLeadAddress(lead.id);
       setMenuPosition({ x, y: y - 100 });
     });
   }
@@ -714,7 +751,6 @@ export default function Tab() {
     setSelectedLeadId(lead.id);  // Set the selected lead ID
     setBigMenu(true);
     setIsModalOpen(true);
-    handleDragStart(lead);
     
     // Clear the flag after the modal is properly opened
     setTimeout(() => {
@@ -765,7 +801,6 @@ export default function Tab() {
 
   async function handleDragStart(lead) {
     recentLead.current = lead;
-    setBigMenu(true);
 
     try {
       const { data, error } = await supabase
@@ -790,8 +825,51 @@ export default function Tab() {
     }
   }
 
-  function handleDragEnd(lead, event) {
-    // Handle drag end if needed
+  async function handleDragEnd(lead, event) {
+    try {
+      const { coordinate } = event.nativeEvent;
+      const { latitude, longitude } = coordinate;
+      
+      console.log(`🎯 Updating lead ${lead.id} location to:`, { latitude, longitude });
+      
+      // Update the lead's location in the database
+      const { error } = await supabase
+        .from('leads')
+        .update({
+          location: {
+            type: 'Point',
+            coordinates: [longitude, latitude]
+          }
+        })
+        .eq('id', lead.id);
+
+      if (error) {
+        console.error('❌ Error updating lead location:', error);
+        Alert.alert('Error', 'Failed to save new lead location. Please try again.');
+      } else {
+        console.log('✅ Lead location updated successfully');
+        
+        // Update the local leads state to reflect the change immediately
+        setLeads(prevLeads => 
+          prevLeads.map(l => 
+            l.id === lead.id 
+              ? { 
+                  ...l, 
+                  latitude, 
+                  longitude,
+                  location: {
+                    type: 'Point',
+                    coordinates: [longitude, latitude]
+                  }
+                }
+              : l
+          )
+        );
+      }
+    } catch (error) {
+      console.error('❌ Unexpected error updating lead location:', error);
+      Alert.alert('Error', 'An unexpected error occurred while saving the lead location.');
+    }
   }
 
   async function addNote() {
@@ -1404,7 +1482,7 @@ export default function Tab() {
       <>
         {!bigMenu && (
           <View 
-            className="absolute bottom-0 left-0 right-0 bg-white rounded-t-xl shadow-lg z-50"
+            className="absolute bottom-0 left-0 right-0 bg-white rounded-t-xl shadow-lg z-50 px-4 py-4"
             style={{
               shadowColor: '#000',
               shadowOffset: { width: 0, height: -2 },
@@ -1415,26 +1493,36 @@ export default function Tab() {
           >
             {/* Address Section */}
             {leadAddress && (
-              <View className="px-4 py-3 border-b border-gray-200">
-                <View className="flex-row items-center">
-                  <Text className="text-black font-bold text-base flex-1">{leadAddress}</Text>
-                  {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
-                    <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-3">
-                      <Text className="text-white text-xs font-semibold">Team Lead</Text>
-                    </View>
-                  )}
-                  <TouchableOpacity onPress={openMaps} className="p-2">
-                    <Image
-                      source={require('../../assets/images/directions.png')}
-                      className="w-7 h-7 tint-blue-500"
-                    />
-                  </TouchableOpacity>
+              <View className="mb-4">
+                <View className="flex-row items-center justify-between">
+                  <View className="flex-row items-center">
+                    <Text className="text-black font-bold text-base">{leadAddress}</Text>
+                    <TouchableOpacity onPress={openMaps} className="p-2 ml-2">
+                      <Image
+                        source={require('../../assets/images/directions.png')}
+                        className="w-7 h-7 tint-blue-500"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                  <View className="flex-row items-center">
+                    {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
+                      <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-3">
+                        <Text className="text-white text-xs font-semibold">Team Lead</Text>
+                      </View>
+                    )}
+                    <TouchableOpacity 
+                      onPress={() => showBigMenu(selectedLead.current)} 
+                      className="bg-green-500 px-3 py-2 rounded-lg"
+                    >
+                      <Text className="text-white text-sm font-semibold">Start Sale</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             )}
 
             {/* Status Options Section */}
-            <View className="px-4 py-3 border-b border-gray-200">
+            <View className="mb-4">
               <View className="flex-row justify-around">
                 {statuses.map((status, index) => {
                   const isCurrentStatus = selectedLead.current.status === index;
@@ -1461,7 +1549,7 @@ export default function Tab() {
             </View>
             
             {/* Inline Note Input Section */}
-            <View className="px-4 py-3">
+            <View>
               <Text className="text-xs text-gray-600 font-medium mb-2">Add Note:</Text>
               <View className="flex-row items-start">
                 <View className="flex-1">
@@ -2041,7 +2129,6 @@ export default function Tab() {
             coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
             pinColor={getPinColor(lead.status, lead.isTeamLead)}
             onPress={(event) => showMenu(lead, event)}
-            onLongPress={() => showBigMenu(lead)}
             onDragStart={() => handleDragStart(lead)}
             onDragEnd={(e) => handleDragEnd(lead, e)}
             draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
@@ -2057,7 +2144,6 @@ export default function Tab() {
           coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
           pinColor={getPinColor(lead.status, lead.isTeamLead)}
           onPress={(event) => showMenu(lead, event)}
-          onLongPress={() => showBigMenu(lead)}
           onDragStart={() => handleDragStart(lead)}
           onDragEnd={(e) => handleDragEnd(lead, e)}
           draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
