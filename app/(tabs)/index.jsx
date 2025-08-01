@@ -52,6 +52,8 @@ export default function Tab() {
   const [isClustering, setIsClustering] = useState(true);
   const [isSatellite, setIsSatellite] = useState(false);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
+  const [isFiltersModalVisible, setIsFiltersModalVisible] = useState(false);
+  const [selectedStatuses, setSelectedStatuses] = useState([0, 1, 2, 3, 4, 5]); // All statuses selected by default
   const [noteText, setNoteText] = useState('');
   const [inlineNoteText, setInlineNoteText] = useState('');
   const [recentNote, setRecentNote] = useState(null);
@@ -103,11 +105,8 @@ export default function Tab() {
   const [newLeadButtonPosition, setNewLeadButtonPosition] = useState({ x: 0, y: 0 });
   const [showNewLeadButton, setShowNewLeadButton] = useState(false);
   const [newLeadCoordinate, setNewLeadCoordinate] = useState(null);
-  const [showAddressValidation, setShowAddressValidation] = useState(false);
   const [newLeadAddress, setNewLeadAddress] = useState('');
   const [newLeadId, setNewLeadId] = useState(null);
-  const [isValidatingAddress, setIsValidatingAddress] = useState(false);
-  const [validationPosition, setValidationPosition] = useState({ x: 0, y: 0 });
   const [editableAddress, setEditableAddress] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [loadingMessage, setLoadingMessage] = useState('');
@@ -1414,11 +1413,12 @@ export default function Tab() {
         lead.latitude >= minLat &&
         lead.latitude <= maxLat &&
         lead.longitude >= minLng &&
-        lead.longitude <= maxLng
+        lead.longitude <= maxLng &&
+        selectedStatuses.includes(lead.status) // Filter by selected statuses
     );
   }
 
-  const visibleLeads = getVisibleLeads();
+  const visibleLeads = useMemo(() => getVisibleLeads(), [leads, region, selectedStatuses]);
 
   const geoJSONLeads = useMemo(() => {
     return visibleLeads.map((lead) => ({
@@ -1495,14 +1495,31 @@ export default function Tab() {
             {leadAddress && (
               <View className="mb-4">
                 <View className="flex-row items-center justify-between">
-                  <View className="flex-row items-center">
-                    <Text className="text-black font-bold text-base">{leadAddress}</Text>
-                    <TouchableOpacity onPress={openMaps} className="p-2 ml-2">
-                      <Image
-                        source={require('../../assets/images/directions.png')}
-                        className="w-7 h-7 tint-blue-500"
-                      />
-                    </TouchableOpacity>
+                  <View className="flex-row items-center flex-1">
+                    {/* Check if this is a new lead being created */}
+                    {newLeadId && selectedLead.current?.id === newLeadId ? (
+                      <View className="flex-1">
+                        <Text className="text-xs text-gray-600 font-medium mb-1">Edit Address:</Text>
+                        <TextInput
+                          className="border border-gray-300 rounded-lg p-2 text-black font-bold text-base flex-1"
+                          value={editableAddress}
+                          onChangeText={setEditableAddress}
+                          multiline
+                          numberOfLines={2}
+                          placeholder="Enter lead address"
+                        />
+                      </View>
+                    ) : (
+                      <>
+                        <Text className="text-black font-bold text-base">{leadAddress}</Text>
+                        <TouchableOpacity onPress={openMaps} className="p-2 ml-2">
+                          <Image
+                            source={require('../../assets/images/directions.png')}
+                            className="w-7 h-7 tint-blue-500"
+                          />
+                        </TouchableOpacity>
+                      </>
+                    )}
                   </View>
                   <View className="flex-row items-center">
                     {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
@@ -1510,12 +1527,22 @@ export default function Tab() {
                         <Text className="text-white text-xs font-semibold">Team Lead</Text>
                       </View>
                     )}
-                    <TouchableOpacity 
-                      onPress={() => showBigMenu(selectedLead.current)} 
-                      className="bg-green-500 px-3 py-2 rounded-lg"
-                    >
-                      <Text className="text-white text-sm font-semibold">Start Sale</Text>
-                    </TouchableOpacity>
+                    {/* Show Save Lead button for new leads, Start Sale for existing */}
+                    {newLeadId && selectedLead.current?.id === newLeadId ? (
+                      <TouchableOpacity 
+                        onPress={saveNewLead} 
+                        className="bg-blue-500 px-3 py-2 rounded-lg"
+                      >
+                        <Text className="text-white text-sm font-semibold">Save Lead</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity 
+                        onPress={() => showBigMenu(selectedLead.current)} 
+                        className="bg-green-500 px-3 py-2 rounded-lg"
+                      >
+                        <Text className="text-white text-sm font-semibold">Start Sale</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               </View>
@@ -1703,7 +1730,6 @@ export default function Tab() {
 
   async function createNewLead(coordinate) {
     try {
-      setIsValidatingAddress(true);
       // Get current user info
       const { data: userData } = await supabase.auth.getUser();
       if (!userData?.user) {
@@ -1711,98 +1737,451 @@ export default function Tab() {
         return;
       }
 
-      // Get user's organization
-      const { data: userOrg, error: userOrgError } = await supabase
-        .from('profiles')
-        .select('organization')
-        .eq('user_id', userData.user.id)
-        .single();
+      // Create temporary lead ID for optimistic update
+      const tempLeadId = `temp_${Date.now()}`;
+      
+      // Create optimistic lead object and add to state immediately
+      const optimisticLead = {
+        id: tempLeadId,
+        latitude: coordinate.latitude,
+        longitude: coordinate.longitude,
+        location: {
+          type: 'Point',
+          coordinates: [coordinate.longitude, coordinate.latitude]
+        },
+        status: 0,
+        knocks: 0,
+        user_id: userData.user.id,
+        isTeamLead: false,
+        fullAddress: 'Loading address...',
+        address: 'Loading...',
+        address2: '',
+        first_name: '',
+        last_name: '',
+        email: '',
+        phone: '',
+        dob: '',
+        mostRecentNote: null
+      };
 
-      if (userOrgError) {
-        console.error('Error fetching user organization:', userOrgError);
-        return;
-      }
+      // Add the optimistic lead to the map immediately
+      setLeads(prevLeads => [...prevLeads, optimisticLead]);
 
-      // Get address from coordinates using reverse geocoding
-      const response = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coordinate.latitude},${coordinate.longitude}&key=${GOOGLE_MAPS_API_KEY}`
-      );
-      const data = await response.json();
+      // Now handle the background processing
+      try {
+        // Get user's organization
+        const { data: userOrg, error: userOrgError } = await supabase
+          .from('profiles')
+          .select('organization')
+          .eq('user_id', userData.user.id)
+          .single();
 
-      if (!data.results || data.results.length === 0) {
-        console.error('No address found for coordinates');
-        return;
-      }
-
-      const addressComponents = data.results[0].address_components;
-      const formattedAddress = data.results[0].formatted_address;
-
-      // Extract address components
-      let streetNumber = '';
-      let route = '';
-      let city = '';
-      let state = '';
-      let zip = '';
-
-      addressComponents.forEach(component => {
-        if (component.types.includes('street_number')) {
-          streetNumber = component.long_name;
-        } else if (component.types.includes('route')) {
-          route = component.long_name;
-        } else if (component.types.includes('locality')) {
-          city = component.long_name;
-        } else if (component.types.includes('administrative_area_level_1')) {
-          state = component.short_name;
-        } else if (component.types.includes('postal_code')) {
-          zip = component.long_name;
+        if (userOrgError) {
+          console.error('Error fetching user organization:', userOrgError);
+          // Remove optimistic lead and show error
+          setLeads(prevLeads => prevLeads.filter(lead => lead.id !== tempLeadId));
+          Alert.alert('Error', 'Failed to create lead: Unable to fetch user information');
+          return;
         }
-      });
 
-      // Create new lead with address information
-      const { data: newLead, error: leadError } = await supabase
-        .from('leads')
-        .insert([{
-          latitude: coordinate.latitude,
-          longitude: coordinate.longitude,
-          location: {
-            type: 'Point',
-            coordinates: [coordinate.longitude, coordinate.latitude]
-          },
-          organization: userOrg.organization,
-          status: 0,
-          address: `${streetNumber} ${route}`.trim(),
-          address2: '',
-          city: city,
-          state: state,
-          zip5: parseInt(zip) || null,
-          zip9: null,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          user_id: userData.user.id,
-          knocks: 0,
-          first_name: '',
-          last_name: '',
-          email: '',
-          phone: '',
-          dob: ''
-        }])
-        .select()
-        .single();
+        // Get address from coordinates using reverse geocoding
+        const response = await fetch(
+          `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coordinate.latitude},${coordinate.longitude}&key=${GOOGLE_MAPS_API_KEY}`
+        );
+        const data = await response.json();
 
-      if (leadError) {
-        console.error('Error creating lead:', leadError);
-        return;
+        let formattedAddress = 'Address not found';
+        let streetNumber = '';
+        let route = '';
+        let city = '';
+        let state = '';
+        let zip = '';
+
+        if (data.results && data.results.length > 0) {
+          const addressComponents = data.results[0].address_components;
+          formattedAddress = data.results[0].formatted_address;
+
+          // Extract address components
+          addressComponents.forEach(component => {
+            if (component.types.includes('street_number')) {
+              streetNumber = component.long_name;
+            } else if (component.types.includes('route')) {
+              route = component.long_name;
+            } else if (component.types.includes('locality')) {
+              city = component.long_name;
+            } else if (component.types.includes('administrative_area_level_1')) {
+              state = component.short_name;
+            } else if (component.types.includes('postal_code')) {
+              zip = component.long_name;
+            }
+          });
+        }
+
+        // Create new lead with address information
+        const { data: newLead, error: leadError } = await supabase
+          .from('leads')
+          .insert([{
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            location: {
+              type: 'Point',
+              coordinates: [coordinate.longitude, coordinate.latitude]
+            },
+            organization: userOrg.organization,
+            status: 0,
+            address: `${streetNumber} ${route}`.trim() || 'Unknown Address',
+            address2: '',
+            city: city,
+            state: state,
+            zip5: parseInt(zip) || null,
+            zip9: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+            user_id: userData.user.id,
+            knocks: 0,
+            first_name: '',
+            last_name: '',
+            email: '',
+            phone: '',
+            dob: ''
+          }])
+          .select()
+          .single();
+
+        if (leadError) {
+          console.error('Error creating lead:', leadError);
+          // Remove optimistic lead and show error
+          setLeads(prevLeads => prevLeads.filter(lead => lead.id !== tempLeadId));
+          Alert.alert('Error', 'Failed to create lead in database');
+          return;
+        }
+
+        // Update the optimistic lead with real data
+        setLeads(prevLeads => 
+          prevLeads.map(lead => 
+            lead.id === tempLeadId 
+              ? {
+                  ...lead,
+                  id: newLead.id,
+                  fullAddress: formattedAddress,
+                  address: newLead.address,
+                  address2: newLead.address2,
+                  city: newLead.city,
+                  state: newLead.state,
+                  zip5: newLead.zip5
+                }
+              : lead
+          )
+        );
+
+        // Automatically open the lead menu for editing
+        selectedLead.current = {
+          ...optimisticLead,
+          id: newLead.id,
+          fullAddress: formattedAddress,
+          address: newLead.address,
+          address2: newLead.address2,
+          city: newLead.city,
+          state: newLead.state,
+          zip5: newLead.zip5
+        };
+        setSelectedLeadId(newLead.id);
+        setEditableAddress(formattedAddress);
+        setNewLeadId(newLead.id);
+        setNewLeadCoordinate(coordinate);
+        setLeadAddress(formattedAddress);
+        // Don't set isModalOpen since we want the status menu, not a blocking modal
+
+      } catch (error) {
+        console.error('Error in background lead processing:', error);
+        // Remove optimistic lead on error
+        setLeads(prevLeads => prevLeads.filter(lead => lead.id !== tempLeadId));
+        Alert.alert('Error', 'Failed to create lead');
       }
-
-      // Set the address for validation
-      setNewLeadAddress(formattedAddress);
-      setEditableAddress(formattedAddress);
-      setNewLeadId(newLead.id);
-      setShowAddressValidation(true);
-      setIsValidatingAddress(false);
     } catch (error) {
       console.error('Error in createNewLead:', error);
-      setIsValidatingAddress(false);
+      Alert.alert('Error', 'Failed to create lead');
+    }
+  }
+
+  async function saveNewLead() {
+    try {
+      if (!newLeadId || !editableAddress.trim()) {
+        Alert.alert('Error', 'Please enter a valid address');
+        return;
+      }
+
+      // Get current user info
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData?.user) {
+        Alert.alert('Error', 'Authentication error');
+        return;
+      }
+
+      // Parse the edited address to extract just the street address (everything before first comma)
+      const addressParts = editableAddress.trim().split(',');
+      const streetAddress = addressParts[0].trim(); // Only the street address portion
+      
+      let parsedAddress = {
+        address: streetAddress,
+        city: '',
+        state: '',
+        zip5: null
+      };
+
+      // If the user edited the address, try to re-geocode it to get proper components
+      if (editableAddress.trim() !== '') {
+        try {
+          const geocodeResponse = await fetch(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(editableAddress.trim())}&key=${GOOGLE_MAPS_API_KEY}`
+          );
+          const geocodeData = await geocodeResponse.json();
+
+          if (geocodeData.results && geocodeData.results.length > 0) {
+            const addressComponents = geocodeData.results[0].address_components;
+            
+            let streetNumber = '';
+            let route = '';
+            let city = '';
+            let state = '';
+            let zip = '';
+
+            addressComponents.forEach(component => {
+              if (component.types.includes('street_number')) {
+                streetNumber = component.long_name;
+              } else if (component.types.includes('route')) {
+                route = component.long_name;
+              } else if (component.types.includes('locality')) {
+                city = component.long_name;
+              } else if (component.types.includes('administrative_area_level_1')) {
+                state = component.short_name;
+              } else if (component.types.includes('postal_code')) {
+                zip = component.long_name;
+              }
+            });
+
+            // Update parsed address with proper components
+            // Use the street address portion from user input, but geocoded components for city/state/zip
+            parsedAddress = {
+              address: streetAddress, // Only street address, not full formatted address
+              city: city,
+              state: state,
+              zip5: parseInt(zip) || null
+            };
+          }
+        } catch (geocodeError) {
+          console.error('Error re-geocoding edited address:', geocodeError);
+          // Fall back to using just the street address portion
+          parsedAddress.address = streetAddress;
+        }
+      }
+
+      // Update the lead with the properly parsed address components
+      const { error: updateError } = await supabase
+        .from('leads')
+        .update({ 
+          address: parsedAddress.address,
+          city: parsedAddress.city,
+          state: parsedAddress.state,
+          zip5: parsedAddress.zip5,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', newLeadId);
+
+      if (updateError) {
+        console.error('Error updating lead address:', updateError);
+        Alert.alert('Error', 'Failed to update lead address');
+        return;
+      }
+
+      // Construct the full address for display
+      const newFullAddress = `${parsedAddress.address}${parsedAddress.city ? `, ${parsedAddress.city}` : ''}${parsedAddress.state ? `, ${parsedAddress.state}` : ''}${parsedAddress.zip5 ? ` ${parsedAddress.zip5}` : ''}`.trim();
+      
+      // Update the lead in local state with the confirmed address components
+      setLeads(prevLeads => 
+        prevLeads.map(lead => 
+          lead.id === newLeadId 
+            ? {
+                ...lead,
+                address: parsedAddress.address,
+                city: parsedAddress.city,
+                state: parsedAddress.state,
+                zip5: parsedAddress.zip5,
+                fullAddress: newFullAddress
+              }
+            : lead
+        )
+      );
+      
+      // Update the leadAddress state for immediate display update
+      setLeadAddress(newFullAddress);
+
+      // Handle territory assignment in the background
+      try {
+        // Get user's organization
+        const { data: userOrg, error: userOrgError } = await supabase
+          .from('profiles')
+          .select('organization')
+          .eq('user_id', userData.user.id)
+          .single();
+
+        if (userOrgError) {
+          console.error('Error fetching user organization:', userOrgError);
+        } else {
+          // Get user's territories
+          const { data: userTerritories, error: userTerritoriesError } = await supabase
+            .from('users_join_territories')
+            .select('territory_id')
+            .eq('uid', userData.user.id);
+
+          if (!userTerritoriesError && userTerritories) {
+            // Get territory geometries
+            const territoryIds = userTerritories.map(t => t.territory_id);
+            const { data: territories, error: territoriesError } = await supabase
+              .from('territories')
+              .select('id, geom')
+              .in('id', territoryIds);
+
+            if (!territoriesError && territories) {
+              // Check if lead is in any existing territory
+              let leadInTerritory = false;
+              for (const territory of territories) {
+                if (!territory.geom || !territory.geom.coordinates || !territory.geom.coordinates[0]) {
+                  continue;
+                }
+
+                const isInPolygon = isPointInPolygon(
+                  { latitude: newLeadCoordinate.latitude, longitude: newLeadCoordinate.longitude },
+                  territory.geom.coordinates[0]
+                );
+
+                if (isInPolygon) {
+                  // Add lead to existing territory
+                  const { error: joinError } = await supabase
+                    .from('leads_join_territories')
+                    .insert([{
+                      lead_id: newLeadId,
+                      territory_id: territory.id,
+                      created_at: new Date().toISOString()
+                    }]);
+
+                  if (!joinError) {
+                    leadInTerritory = true;
+                    break;
+                  }
+                }
+              }
+
+              // If lead is not in any territory, create a new small territory
+              if (!leadInTerritory) {
+                const radius = 0.0009; // roughly 100m in degrees
+                const polygon = [
+                  [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius],
+                  [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude - radius],
+                  [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude + radius],
+                  [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude + radius],
+                  [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius]
+                ];
+
+                // Create new territory
+                const { data: newTerritory, error: territoryError } = await supabase
+                  .from('territories')
+                  .insert([{
+                    name: `Lead ${newLeadId} Territory`,
+                    geom: {
+                      type: 'Polygon',
+                      coordinates: [polygon]
+                    },
+                    organization: userOrg.organization,
+                    created_at: new Date().toISOString()
+                  }])
+                  .select()
+                  .single();
+
+                if (!territoryError) {
+                  // Add user to territory
+                  await supabase
+                    .from('users_join_territories')
+                    .insert([{
+                      uid: userData.user.id,
+                      territory_id: newTerritory.id,
+                      created_at: new Date().toISOString()
+                    }]);
+
+                  // Add lead to territory
+                  await supabase
+                    .from('leads_join_territories')
+                    .insert([{
+                      lead_id: newLeadId,
+                      territory_id: newTerritory.id,
+                      created_at: new Date().toISOString()
+                    }]);
+                }
+              }
+            }
+          }
+        }
+      } catch (territoryError) {
+        console.error('Error handling territory assignment:', territoryError);
+        // Don't alert for territory errors - the lead is still created successfully
+      }
+
+      // Save any note that was entered during lead creation
+      if (inlineNoteText.trim() !== '') {
+        try {
+          const { error: noteError } = await supabase.from('notes').insert({
+            lead_id: newLeadId,
+            note: inlineNoteText.trim(),
+            created_by: userData.user.id,
+            created_at: new Date().toISOString(),
+            status: selectedLead.current?.status || 0,
+          });
+
+          if (noteError) {
+            console.error('Error saving note for new lead:', noteError);
+            // Don't fail the lead creation for note errors, just log it
+          } else {
+            console.log('Note saved successfully for new lead');
+            
+            // Update the lead in local state with the note
+            const newNote = { 
+              note: inlineNoteText.trim(), 
+              created_at: new Date().toISOString() 
+            };
+            
+            setLeads(prevLeads => 
+              prevLeads.map(lead => 
+                lead.id === newLeadId 
+                  ? { ...lead, mostRecentNote: newNote }
+                  : lead
+              )
+            );
+          }
+        } catch (noteError) {
+          console.error('Unexpected error saving note for new lead:', noteError);
+          // Don't fail the lead creation for note errors
+        }
+      }
+      
+      // Clear all new lead state and close menu
+      selectedLead.current = null;
+      setSelectedLeadId(null);
+      setRecentNote(null);
+      setLeadAddress(null);
+      setMenuPosition({ x: 0, y: 0 });
+      setInlineNoteText('');
+      setShowNewLeadButton(false);
+      setNewLeadAddress('');
+      setEditableAddress('');
+      setNewLeadId(null);
+      setNewLeadCoordinate(null);
+      setDummyRender((prev) => !prev);
+      
+      // Show success message
+      Alert.alert('Success', 'Lead created successfully!');
+    } catch (error) {
+      console.error('Error in saveNewLead:', error);
+      Alert.alert('Error', 'Failed to save lead');
     }
   }
 
@@ -1812,18 +2191,6 @@ export default function Tab() {
       const { data: userData } = await supabase.auth.getUser();
       if (!userData?.user) {
         Alert.alert('Error', 'Authentication error');
-        return;
-      }
-
-      // Get user's organization
-      const { data: userOrg, error: userOrgError } = await supabase
-        .from('profiles')
-        .select('organization')
-        .eq('user_id', userData.user.id)
-        .single();
-
-      if (userOrgError) {
-        console.error('Error fetching user organization:', userOrgError);
         return;
       }
 
@@ -1838,166 +2205,169 @@ export default function Tab() {
 
       if (updateError) {
         console.error('Error updating lead address:', updateError);
+        Alert.alert('Error', 'Failed to update lead address');
         return;
       }
 
-      // Get user's territories
-      const { data: userTerritories, error: userTerritoriesError } = await supabase
-        .from('users_join_territories')
-        .select('territory_id')
-        .eq('uid', userData.user.id);
+      // Update the lead in local state with the confirmed address
+      setLeads(prevLeads => 
+        prevLeads.map(lead => 
+          lead.id === newLeadId 
+            ? {
+                ...lead,
+                address: editableAddress,
+                fullAddress: editableAddress
+              }
+            : lead
+        )
+      );
 
-      if (userTerritoriesError) {
-        console.error('Error fetching user territories:', userTerritoriesError);
-        return;
-      }
+      // Handle territory assignment in the background
+      try {
+        // Get user's organization
+        const { data: userOrg, error: userOrgError } = await supabase
+          .from('profiles')
+          .select('organization')
+          .eq('user_id', userData.user.id)
+          .single();
 
-      // Get territory geometries
-      const territoryIds = userTerritories.map(t => t.territory_id);
-      const { data: territories, error: territoriesError } = await supabase
-        .from('territories')
-        .select('id, geom')
-        .in('id', territoryIds);
-
-      if (territoriesError) {
-        console.error('Error fetching territory geometries:', territoriesError);
-        return;
-      }
-
-      // Check if lead is in any existing territory
-      let leadInTerritory = false;
-      for (const territory of territories) {
-        if (!territory.geom || !territory.geom.coordinates || !territory.geom.coordinates[0]) {
-          continue;
+        if (userOrgError) {
+          console.error('Error fetching user organization:', userOrgError);
+          return;
         }
 
-        const isInPolygon = isPointInPolygon(
-          { latitude: newLeadCoordinate.latitude, longitude: newLeadCoordinate.longitude },
-          territory.geom.coordinates[0]
-        );
+        // Get user's territories
+        const { data: userTerritories, error: userTerritoriesError } = await supabase
+          .from('users_join_territories')
+          .select('territory_id')
+          .eq('uid', userData.user.id);
 
-        if (isInPolygon) {
-          // Add lead to existing territory
-          const { error: joinError } = await supabase
-            .from('leads_join_territories')
+        if (userTerritoriesError) {
+          console.error('Error fetching user territories:', userTerritoriesError);
+          return;
+        }
+
+        // Get territory geometries
+        const territoryIds = userTerritories.map(t => t.territory_id);
+        const { data: territories, error: territoriesError } = await supabase
+          .from('territories')
+          .select('id, geom')
+          .in('id', territoryIds);
+
+        if (territoriesError) {
+          console.error('Error fetching territory geometries:', territoriesError);
+          return;
+        }
+
+        // Check if lead is in any existing territory
+        let leadInTerritory = false;
+        for (const territory of territories) {
+          if (!territory.geom || !territory.geom.coordinates || !territory.geom.coordinates[0]) {
+            continue;
+          }
+
+          const isInPolygon = isPointInPolygon(
+            { latitude: newLeadCoordinate.latitude, longitude: newLeadCoordinate.longitude },
+            territory.geom.coordinates[0]
+          );
+
+          if (isInPolygon) {
+            // Add lead to existing territory
+            const { error: joinError } = await supabase
+              .from('leads_join_territories')
+              .insert([{
+                lead_id: newLeadId,
+                territory_id: territory.id,
+                created_at: new Date().toISOString()
+              }]);
+
+            if (joinError) {
+              console.error('Error joining lead to territory:', joinError);
+            } else {
+              leadInTerritory = true;
+              break;
+            }
+          }
+        }
+
+        // If lead is not in any territory, create a new small territory
+        if (!leadInTerritory) {
+          // Create a small polygon around the point (approximately 100m radius)
+          const radius = 0.0009; // roughly 100m in degrees
+          const polygon = [
+            [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius],
+            [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude - radius],
+            [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude + radius],
+            [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude + radius],
+            [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius]
+          ];
+
+          // Create new territory
+          const { data: newTerritory, error: territoryError } = await supabase
+            .from('territories')
             .insert([{
-              lead_id: newLeadId,
-              territory_id: territory.id,
+              name: `Lead ${newLeadId} Territory`,
+              geom: {
+                type: 'Polygon',
+                coordinates: [polygon]
+              },
+              organization: userOrg.organization,
+              created_at: new Date().toISOString()
+            }])
+            .select()
+            .single();
+
+          if (territoryError) {
+            console.error('Error creating territory:', territoryError);
+            return;
+          }
+
+          // Add user to territory
+          const { error: userJoinError } = await supabase
+            .from('users_join_territories')
+            .insert([{
+              uid: userData.user.id,
+              territory_id: newTerritory.id,
               created_at: new Date().toISOString()
             }]);
 
-          if (joinError) {
-            console.error('Error joining lead to territory:', joinError);
-          } else {
-            leadInTerritory = true;
-            break;
+          if (userJoinError) {
+            console.error('Error joining user to territory:', userJoinError);
+          }
+
+          // Add lead to territory
+          const { error: leadJoinError } = await supabase
+            .from('leads_join_territories')
+            .insert([{
+              lead_id: newLeadId,
+              territory_id: newTerritory.id,
+              created_at: new Date().toISOString()
+            }]);
+
+          if (leadJoinError) {
+            console.error('Error joining lead to territory:', leadJoinError);
           }
         }
+      } catch (territoryError) {
+        console.error('Error handling territory assignment:', territoryError);
+        // Don't alert for territory errors - the lead is still created successfully
       }
-
-      // If lead is not in any territory, create a new small territory
-      if (!leadInTerritory) {
-        // Create a small polygon around the point (approximately 100m radius)
-        const radius = 0.0009; // roughly 100m in degrees
-        const polygon = [
-          [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius],
-          [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude - radius],
-          [newLeadCoordinate.longitude + radius, newLeadCoordinate.latitude + radius],
-          [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude + radius],
-          [newLeadCoordinate.longitude - radius, newLeadCoordinate.latitude - radius]
-        ];
-
-        // Create new territory
-        const { data: newTerritory, error: territoryError } = await supabase
-          .from('territories')
-          .insert([{
-            name: `Lead ${newLeadId} Territory`,
-            geom: {
-              type: 'Polygon',
-              coordinates: [polygon]
-            },
-            organization: userOrg.organization,
-            created_at: new Date().toISOString()
-          }])
-          .select()
-          .single();
-
-        if (territoryError) {
-          console.error('Error creating territory:', territoryError);
-          return;
-        }
-
-        // Add user to territory
-        const { error: userJoinError } = await supabase
-          .from('users_join_territories')
-          .insert([{
-            uid: userData.user.id,
-            territory_id: newTerritory.id,
-            created_at: new Date().toISOString()
-          }]);
-
-        if (userJoinError) {
-          console.error('Error joining user to territory:', userJoinError);
-          return;
-        }
-
-        // Add lead to territory
-        const { error: leadJoinError } = await supabase
-          .from('leads_join_territories')
-          .insert([{
-            lead_id: newLeadId,
-            territory_id: newTerritory.id,
-            created_at: new Date().toISOString()
-          }]);
-
-        if (leadJoinError) {
-          console.error('Error joining lead to territory:', leadJoinError);
-          return;
-        }
-      }
-
-      // Add the new lead to the existing leads state instead of refetching all leads
-      const newLeadForState = {
-        id: newLeadId,
-        latitude: newLeadCoordinate.latitude,
-        longitude: newLeadCoordinate.longitude,
-        location: {
-          type: 'Point',
-          coordinates: [newLeadCoordinate.longitude, newLeadCoordinate.latitude]
-        },
-        status: 0,
-        knocks: 0,
-        user_id: userData.user.id,
-        isTeamLead: false,
-        // Add other properties that might be needed
-        first_name: '',
-        last_name: '',
-        email: '',
-        phone: '',
-        dob: ''
-      };
-
-      // Add the new lead to the existing leads array
-      setLeads(prevLeads => [...prevLeads, newLeadForState]);
       
       // Clear all state and close modal
       setShowNewLeadButton(false);
-      setShowAddressValidation(false);
       setNewLeadAddress('');
       setEditableAddress('');
       setNewLeadId(null);
       setNewLeadCoordinate(null);
-      setValidationPosition({ x: 0, y: 0 });
     } catch (error) {
       console.error('Error in confirmLeadAddress:', error);
+      Alert.alert('Error', 'Failed to confirm lead address');
       // Still clear state even if there's an error
       setShowNewLeadButton(false);
-      setShowAddressValidation(false);
       setNewLeadAddress('');
       setEditableAddress('');
       setNewLeadId(null);
       setNewLeadCoordinate(null);
-      setValidationPosition({ x: 0, y: 0 });
     }
   }
 
@@ -2005,20 +2375,30 @@ export default function Tab() {
     try {
       // Delete the lead if it exists
       if (newLeadId) {
-        const { error: deleteError } = await supabase
-          .from('leads')
-          .delete()
-          .eq('id', newLeadId);
+        // If it's a temporary lead (optimistic update), just remove from state
+        if (newLeadId.toString().startsWith('temp_')) {
+          setLeads(prevLeads => prevLeads.filter(lead => lead.id !== newLeadId));
+        } else {
+          // If it's a real lead in database, delete it
+          const { error: deleteError } = await supabase
+            .from('leads')
+            .delete()
+            .eq('id', newLeadId);
 
-        if (deleteError) {
-          console.error('Error deleting lead:', deleteError);
+          if (deleteError) {
+            console.error('Error deleting lead:', deleteError);
+          } else {
+            // Also remove from local state
+            setLeads(prevLeads => prevLeads.filter(lead => lead.id !== newLeadId));
+          }
         }
       }
 
       setShowNewLeadButton(false);
-      setShowAddressValidation(false);
       setNewLeadAddress('');
+      setEditableAddress('');
       setNewLeadId(null);
+      setNewLeadCoordinate(null);
     } catch (error) {
       console.error('Error in cancelLeadCreation:', error);
     }
@@ -2158,11 +2538,17 @@ export default function Tab() {
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         initialRegion={initialRegion}
+        onRegionChange={() => {
+          // Hide the +New Lead button immediately when user starts panning/zooming
+          if (!isMarkerLongPressing && !bigMenu) {
+            setShowNewLeadButton(false);
+          }
+        }}
         onRegionChangeComplete={(newRegion) => {
           onRegionChangeComplete(newRegion);
-          // Don't handle map interaction if we're in the middle of a marker operation
+          // Don't close menu when panning/zooming - only hide the +New Lead button
           if (!isMarkerLongPressing && !bigMenu) {
-            handleMapInteraction();
+            setShowNewLeadButton(false);
           }
         }}
         className="flex-1"
@@ -3507,15 +3893,26 @@ export default function Tab() {
 
         {/* Settings Content */}
         <View className="space-y-6">
-          {/* Satellite View Toggle */}
-          <View className="flex-row items-center justify-between p-3 bg-gray-800 rounded-lg">
-            <Text className="text-md text-gray-200">Satellite View</Text>
-            <Switch
-              value={isSatellite}
-              onValueChange={(value) => setIsSatellite(value)}
-              thumbColor={isSatellite ? '#4ADE80' : '#f4f3f4'}
-              trackColor={{ false: '#767577', true: '#81b0ff' }}
-            />
+          {/* Edit Filters and Satellite View Row */}
+          <View className="flex-row space-x-3">
+            {/* Edit Filters Button - Left Half */}
+            <TouchableOpacity
+              className="flex-1 p-3 bg-gray-800 rounded-lg items-center justify-center"
+              onPress={() => setIsFiltersModalVisible(true)}
+            >
+              <Text className="text-md text-gray-200 font-medium">Edit Filters</Text>
+            </TouchableOpacity>
+            
+            {/* Satellite View Toggle - Right Half */}
+            <View className="flex-1 flex-row items-center justify-between p-3 bg-gray-800 rounded-lg">
+              <Text className="text-md text-gray-200">Satellite View</Text>
+              <Switch
+                value={isSatellite}
+                onValueChange={(value) => setIsSatellite(value)}
+                thumbColor={isSatellite ? '#4ADE80' : '#f4f3f4'}
+                trackColor={{ false: '#767577', true: '#81b0ff' }}
+              />
+            </View>
           </View>
 
           {/* Manager Mode Toggle - Only visible for managers */}
@@ -3658,6 +4055,106 @@ export default function Tab() {
       </View>
     </Modal>
 
+    {/* Filters Modal */}
+    <Modal
+      animationType="slide"
+      transparent={false}
+      visible={isFiltersModalVisible}
+      onRequestClose={() => setIsFiltersModalVisible(false)}
+      statusBarTranslucent={false}
+    >
+      {/* Status Bar Styling */}
+      <StatusBar
+        barStyle="light-content"
+        backgroundColor="#121212"
+      />
+
+      <View className="flex-1 bg-gray-900 px-3 py-8">
+        {/* Header */}
+        <View className="flex-row justify-between items-center mb-6">
+          <Text className="text-xl font-semibold text-white">Filters</Text>
+          <TouchableOpacity onPress={() => setIsFiltersModalVisible(false)}>
+            <Text className="text-xl font-semibold text-white">✕</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Filters Content */}
+        <View className="space-y-6">
+          {/* Status Filters */}
+          <View className="p-4 bg-gray-800 rounded-lg">
+            <View className="flex-row justify-between items-center mb-4">
+              <Text className="text-lg text-white font-semibold">Lead Status Filters</Text>
+              <TouchableOpacity
+                className="bg-blue-600 px-3 py-1.5 rounded-md"
+                onPress={() => {
+                  // If all are selected, deselect all. Otherwise, select all.
+                  if (selectedStatuses.length === 6) {
+                    setSelectedStatuses([]);
+                  } else {
+                    setSelectedStatuses([0, 1, 2, 3, 4, 5]);
+                  }
+                }}
+              >
+                <Text className="text-white text-xs font-medium">
+                  {selectedStatuses.length === 6 ? 'Deselect All' : 'Select All'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            <Text className="text-sm text-gray-400 mb-4">Select which lead statuses to show on the map</Text>
+            
+            <View className="flex-row justify-between">
+              {['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'].map((status, index) => {
+                const colors = ['#800080', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
+                const isSelected = selectedStatuses.includes(index);
+                
+                return (
+                  <TouchableOpacity
+                    key={index}
+                    className={`items-center p-2 rounded-lg flex-1 mx-0.25 ${
+                      isSelected ? 'bg-gray-700' : ''
+                    }`}
+                    onPress={() => {
+                      setSelectedStatuses(prev => 
+                        prev.includes(index) 
+                          ? prev.filter(s => s !== index)
+                          : [...prev, index]
+                      );
+                    }}
+                  >
+                    <View 
+                      style={{ backgroundColor: colors[index] }} 
+                      className="h-3 w-full rounded mb-2" 
+                    />
+                    <Text className={`text-xs text-center ${
+                      isSelected ? 'text-white font-medium' : 'text-gray-400'
+                    }`}>
+                      {status}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        </View>
+
+        {/* Save Button */}
+        <View className="absolute bottom-8 left-6 right-6">
+          <TouchableOpacity
+            className="bg-blue-600 p-4 rounded-lg shadow"
+            onPress={() => {
+              setIsFiltersModalVisible(false);
+              setIsSettingsModalVisible(false); // Close settings modal too
+              // The filtering will happen automatically through the updated selectedStatuses state
+            }}
+          >
+            <Text className="text-white font-semibold text-center text-lg">
+              Apply Filters
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+
     {/* Crosshair */}
     {!startSaleModal && (
       <View className="absolute top-10 right-4 items-center">
@@ -3666,6 +4163,18 @@ export default function Tab() {
           onPress={centerMapOnUserLocation}
         >
           <Image source={require('../../assets/images/crosshair.png')} className="w-7 h-7" />
+        </TouchableOpacity>
+      </View>
+    )}
+
+    {/* Filter Button */}
+    {!startSaleModal && (
+      <View className="absolute top-24 right-4 items-center">
+        <TouchableOpacity
+          className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
+          onPress={() => setIsFiltersModalVisible(true)}
+        >
+          <Image source={require('../../assets/images/funnel-icon.png')} className="w-7 h-7" />
         </TouchableOpacity>
       </View>
     )}
@@ -4135,55 +4644,12 @@ export default function Tab() {
       </Modal>
     )}
 
-    {/* Address Validation Modal */}
-    {showAddressValidation && (
-      <View className="absolute inset-0 bg-black bg-opacity-50 z-50">
-        <ScrollView 
-          className="flex-1"
-          contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View className="bg-white rounded-lg p-4 m-4">
-            <Text className="text-xl font-bold mb-4">Confirm Intended Address</Text>
-            <TextInput
-              className="border border-gray-300 rounded-lg p-3 mb-4 text-lg"
-              value={editableAddress}
-              onChangeText={setEditableAddress}
-              multiline
-              numberOfLines={3}
-              placeholder="Enter or edit the address"
-            />
-            <View className="flex-row justify-end space-x-3">
-              <TouchableOpacity
-                className="bg-gray-500 px-4 py-2 rounded-lg"
-                onPress={cancelLeadCreation}
-              >
-                <Text className="text-white font-semibold">Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                className="bg-blue-500 px-4 py-2 rounded-lg"
-                onPress={confirmLeadAddress}
-              >
-                <Text className="text-white font-semibold">Save</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </ScrollView>
-      </View>
-    )}
 
-    {/* Loading Overlay */}
-    {isValidatingAddress && (
-      <View className="absolute inset-0 bg-black bg-opacity-50 justify-center items-center z-50">
-        <View className="bg-white rounded-lg p-4 m-4 w-[90%] max-w-md">
-          <Text className="text-lg font-semibold mb-2">Creating Lead...</Text>
-          <Text className="text-gray-600">Please wait while we process your request.</Text>
-        </View>
-      </View>
-    )}
+
+
 
     {/* Create New Lead Button */}
-    {showNewLeadButton && !showAddressValidation && newLeadButtonPosition && (
+    {showNewLeadButton && newLeadButtonPosition && (
       <TouchableOpacity
         className="absolute z-50 bg-blue-500 px-4 py-2 rounded-lg shadow-lg"
         style={{
@@ -4199,7 +4665,7 @@ export default function Tab() {
           setShowNewLeadButton(false);
         }}
       >
-        <Text className="text-white font-semibold">Create New Lead</Text>
+        <Text className="text-white font-semibold">+New Lead</Text>
       </TouchableOpacity>
     )}
 
