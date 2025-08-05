@@ -3794,7 +3794,7 @@ export default function Tab() {
       {/* Remove the first Create New Lead button */}
 
       {/* Hamburger Menu */}
-      <View className="absolute top-10 left-4 z-10">
+      <View className="absolute top-16 left-4 z-10">
         <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
           <View className="w-6 h-5 justify-between">
             <View className="w-full h-0.5 bg-gray-800 opacity-25" />
@@ -3806,7 +3806,7 @@ export default function Tab() {
       
       {/* Manager Mode Badge */}
       {isManager && managerModeEnabled && (
-        <View className="absolute top-10 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
+        <View className="absolute top-16 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
           <Text className="text-white font-semibold text-xs">Manager Mode</Text>
         </View>
       )}
@@ -3814,7 +3814,7 @@ export default function Tab() {
       {/* Territory Management Button (Only visible in manager mode) */}
       {isManager && managerModeEnabled && (
         <TouchableOpacity 
-          className="absolute top-20 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
+          className="absolute top-26 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
           onPress={() => {
             setIsTerritoriesModalVisible(true);
             setIsModalMinimized(false);
@@ -3882,7 +3882,7 @@ export default function Tab() {
         backgroundColor="#121212" // Dark background for the status bar
       />
 
-      <View className="flex-1 bg-gray-900 px-6 py-8">
+      <View className="flex-1 bg-gray-900 px-6 pt-16 pb-8">
         {/* Header */}
         <View className="flex-row justify-between items-center mb-6">
           <Text className="text-xl font-semibold text-white">Settings</Text>
@@ -3915,21 +3915,7 @@ export default function Tab() {
             </View>
           </View>
 
-          {/* Manager Mode Toggle - Only visible for managers */}
-          {isManager && (
-            <View className="flex-row items-center justify-between p-3 bg-gray-800 rounded-lg">
-              <View>
-                <Text className="text-md text-gray-200">Manager Mode</Text>
-                <Text className="text-xs text-gray-400 mt-1">Enable special manager features</Text>
-              </View>
-              <Switch
-                value={managerModeEnabled}
-                onValueChange={(value) => setManagerModeEnabled(value)}
-                thumbColor={managerModeEnabled ? '#4ADE80' : '#f4f3f4'}
-                trackColor={{ false: '#767577', true: '#81b0ff' }}
-              />
-            </View>
-          )}
+
 
           {/* Credential Type Selection */}
           <View>
@@ -4157,7 +4143,7 @@ export default function Tab() {
 
     {/* Crosshair */}
     {!startSaleModal && (
-      <View className="absolute top-10 right-4 items-center">
+      <View className="absolute top-16 right-4 items-center">
         <TouchableOpacity
           className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
           onPress={centerMapOnUserLocation}
@@ -4169,12 +4155,32 @@ export default function Tab() {
 
     {/* Filter Button */}
     {!startSaleModal && (
-      <View className="absolute top-24 right-4 items-center">
+      <View className="absolute top-28 right-4 items-center">
         <TouchableOpacity
           className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
           onPress={() => setIsFiltersModalVisible(true)}
         >
           <Image source={require('../../assets/images/funnel-icon.png')} className="w-7 h-7" />
+        </TouchableOpacity>
+      </View>
+    )}
+
+    {/* Manager Mode Button - Only visible for managers */}
+    {!startSaleModal && isManager && (
+      <View className="absolute top-40 right-4 items-center">
+        <TouchableOpacity
+          className={`p-0.5 rounded-full border border-black ${
+            managerModeEnabled 
+              ? 'bg-purple-600 opacity-90' 
+              : 'bg-transparent opacity-25'
+          }`}
+          onPress={() => setManagerModeEnabled(!managerModeEnabled)}
+        >
+          <View className="w-7 h-7 items-center justify-center">
+            <Text className={`text-xs font-bold ${
+              managerModeEnabled ? 'text-white' : 'text-black'
+            }`}>M</Text>
+          </View>
         </TouchableOpacity>
       </View>
     )}
