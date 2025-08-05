@@ -8,6 +8,10 @@
       "distribution": "internal",
       "android": {
         "buildType": "app-bundle"
+      },
+      "ios": {
+
+        "simulator": false
       }
     },
     "preview": {

@@ -12,7 +12,9 @@ import {
   Platform,
   StatusBar,
   ActivityIndicator,
-  Alert
+  Alert,
+  Keyboard,
+  Animated
 } from 'react-native';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
@@ -70,6 +72,7 @@ export default function Tab() {
   const selectedPlan = useRef(null);
   const showCredentialsRef = useRef(false);
   const uasapRef = useRef('');
+  const lastMarkerPressTime = useRef(0);
   const pasapRef = useRef('');
   const ubassRef = useRef('');
   const pbassRef = useRef('');
@@ -108,12 +111,53 @@ export default function Tab() {
   const [newLeadAddress, setNewLeadAddress] = useState('');
   const [newLeadId, setNewLeadId] = useState(null);
   const [editableAddress, setEditableAddress] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [loadingMessage, setLoadingMessage] = useState('');
+
   const [selectedLeadId, setSelectedLeadId] = useState(null);  // Add this new state
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isMarkerLongPressing, setIsMarkerLongPressing] = useState(false);
   const [shouldAutoCenter, setShouldAutoCenter] = useState(true); // Track if we should auto-center on location
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const menuBottomPosition = useRef(new Animated.Value(0)).current;
+
+  // Keyboard event listeners
+  useEffect(() => {
+    const keyboardWillShowListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+      (event) => {
+        const height = event.endCoordinates.height;
+        setKeyboardHeight(height);
+        setIsKeyboardVisible(true);
+        
+        // Animate menu position
+        Animated.timing(menuBottomPosition, {
+          toValue: height,
+          duration: Platform.OS === 'ios' ? event.duration || 250 : 250,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+
+    const keyboardWillHideListener = Keyboard.addListener(
+      Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+      (event) => {
+        setKeyboardHeight(0);
+        setIsKeyboardVisible(false);
+        
+        // Animate menu position back to bottom
+        Animated.timing(menuBottomPosition, {
+          toValue: 0,
+          duration: Platform.OS === 'ios' ? event?.duration || 250 : 250,
+          useNativeDriver: false,
+        }).start();
+      }
+    );
+
+    return () => {
+      keyboardWillShowListener?.remove();
+      keyboardWillHideListener?.remove();
+    };
+  }, [menuBottomPosition]);
 
   // normal stuff + fetch credential type
   useEffect(() => {
@@ -221,11 +265,7 @@ export default function Tab() {
     return chunks;
   }
 
-  // Add this new function to handle loading states
-  const setLoading = (loading, message = '') => {
-    setIsLoading(loading);
-    setLoadingMessage(message);
-  };
+
 
   // Update fetchLeads to use the new loading state
   async function fetchLeads() {
@@ -233,8 +273,6 @@ export default function Tab() {
     if (!userData?.user) return;
     
     try {
-      setLoading(true, 'Loading territories...');
-      
       // Step 1: Get user territories (this should be fast)
       const { data: userTerritories, error: userTerritoriesError } = await supabase
           .from('users_join_territories')
@@ -254,7 +292,6 @@ export default function Tab() {
       }
       
       const territoryIds = userTerritories.map(territory => territory.territory_id);
-      setLoading(true, 'Finding leads...');
       
       // Step 2: Get all lead IDs in parallel chunks of territories
       const territoryChunkSize = 20; // Process territories in parallel
@@ -292,8 +329,6 @@ export default function Tab() {
         setLeads([]);
         return;
       }
-      
-      setLoading(true, `Loading ${allLeadIds.length} leads...`);
       
       // Step 3: Fetch recent notes for all leads in parallel
       const notesPromise = (async () => {
@@ -360,7 +395,6 @@ export default function Tab() {
                 }
                 
                 processedLeads += leadChunk.length;
-                setLoading(true, `Loaded ${processedLeads}/${allLeadIds.length} leads...`);
                 
                 return leads || [];
               } catch (chunkError) {
@@ -438,7 +472,7 @@ export default function Tab() {
         setLeads([]);
       }
     } finally {
-      setLoading(false);
+      // Cleanup completed
     }
   }
 
@@ -714,11 +748,17 @@ export default function Tab() {
   }
 
   async function showMenu(lead, event) {
+    console.log('🎯 showMenu called for lead:', lead.id, 'on platform:', Platform.OS);
+    
+    // Record the time this marker was pressed
+    lastMarkerPressTime.current = Date.now();
+    
     // Auto-save inline note from previous lead before switching
     if (selectedLead.current && inlineNoteText.trim() !== '') {
       await autoSaveInlineNote();
     }
     
+    console.log('🔍 Setting lead data...');
     recentLead.current = lead;
     selectedLead.current = lead; // Set immediately for UI rendering
     setSelectedLeadId(lead.id);
@@ -726,14 +766,12 @@ export default function Tab() {
     // Set address and recent note immediately so they render with the menu
     setLeadAddress(lead.fullAddress || '');
     setRecentNote(lead.mostRecentNote || null);
-    // Don't set isModalOpen for the status overlay - it should allow map scrolling
-
-    const { coordinate } = event.nativeEvent;
-    mapRef.current.pointForCoordinate(coordinate).then((point) => {
-      const x = point.x - width / 2;
-      const y = point.y - height / 2;
-      setMenuPosition({ x, y: y - 100 });
-    });
+    
+    console.log('✅ Lead data set. selectedLead.current:', selectedLead.current?.id);
+    console.log('✅ leadAddress:', lead.fullAddress);
+    
+    // Force a re-render to ensure the menu appears
+    setDummyRender(prev => !prev);
   }
 
   function showBigMenu(lead) {
@@ -800,6 +838,9 @@ export default function Tab() {
 
   async function handleDragStart(lead) {
     recentLead.current = lead;
+    
+    // Set flag to prevent map interactions during drag operations
+    setIsMarkerLongPressing(true);
 
     try {
       const { data, error } = await supabase
@@ -868,7 +909,25 @@ export default function Tab() {
     } catch (error) {
       console.error('❌ Unexpected error updating lead location:', error);
       Alert.alert('Error', 'An unexpected error occurred while saving the lead location.');
+    } finally {
+      // Clear the marker long press flag after drag operation completes
+      setIsMarkerLongPressing(false);
     }
+  }
+
+  function handleMarkerLongPress(lead) {
+    // Set flag to prevent map long press from triggering +New Lead button
+    setIsMarkerLongPressing(true);
+    
+    // On iOS, long press on a marker often precedes drag operations
+    // This handler prevents the map's onLongPress from firing when holding on a marker
+    console.log('Marker long press detected for lead:', lead.id);
+    
+    // Clear the flag after a short delay if no drag operation starts
+    setTimeout(() => {
+      // Only clear if we're not in a drag operation (which would set its own flag management)
+      setIsMarkerLongPressing(false);
+    }, 1000);
   }
 
   async function addNote() {
@@ -903,8 +962,6 @@ export default function Tab() {
     setIsNoteModalVisible(false);
 
     try {
-        setLoading(true, 'Adding note...');
-        
         // Check authentication
         console.log('🔐 Checking authentication...');
         const { data: userData, error: authError } = await supabase.auth.getUser();
@@ -965,7 +1022,6 @@ export default function Tab() {
         setRecentNote(null);
         Alert.alert('Error', `An unexpected error occurred: ${error.message}`);
     } finally {
-        setLoading(false);
         console.log('🏁 Finished addNote function');
     }
   }
@@ -1001,8 +1057,6 @@ export default function Tab() {
     setInlineNoteText('');
 
     try {
-        setLoading(true, 'Saving note...');
-        
         // Check authentication
         console.log('🔐 Checking authentication...');
         const { data: userData, error: authError } = await supabase.auth.getUser();
@@ -1046,7 +1100,6 @@ export default function Tab() {
         console.error('❌ Unexpected error adding inline note:', error);
         setRecentNote(null);
     } finally {
-        setLoading(false);
         console.log('🏁 Finished autoSaveInlineNote function');
     }
   }
@@ -1481,9 +1534,10 @@ export default function Tab() {
     return (
       <>
         {!bigMenu && (
-          <View 
-            className="absolute bottom-0 left-0 right-0 bg-white rounded-t-xl shadow-lg z-50 px-4 py-4"
+          <Animated.View 
+            className="absolute left-0 right-0 bg-white rounded-t-xl shadow-lg z-50 px-4 py-4"
             style={{
+              bottom: menuBottomPosition,
               shadowColor: '#000',
               shadowOffset: { width: 0, height: -2 },
               shadowOpacity: 0.1,
@@ -1587,6 +1641,14 @@ export default function Tab() {
                     value={inlineNoteText}
                     onChangeText={setInlineNoteText}
                     textAlignVertical="top"
+                    onFocus={() => {
+                      // Optional: Add any additional focus handling if needed
+                      console.log('📝 Note input focused');
+                    }}
+                    onBlur={() => {
+                      // Optional: Add any additional blur handling if needed
+                      console.log('📝 Note input blurred');
+                    }}
                   />
                 </View>
                 {recentNote && (
@@ -1599,7 +1661,7 @@ export default function Tab() {
                 )}
               </View>
             </View>
-          </View>
+          </Animated.View>
         )}
       </>
     );
@@ -2176,9 +2238,6 @@ export default function Tab() {
       setNewLeadId(null);
       setNewLeadCoordinate(null);
       setDummyRender((prev) => !prev);
-      
-      // Show success message
-      Alert.alert('Success', 'Lead created successfully!');
     } catch (error) {
       console.error('Error in saveNewLead:', error);
       Alert.alert('Error', 'Failed to save lead');
@@ -2410,6 +2469,15 @@ export default function Tab() {
       return;
     }
     
+    // Check if a marker was pressed very recently (within 200ms) - if so, ignore this map interaction
+    const timeSinceMarkerPress = Date.now() - lastMarkerPressTime.current;
+    if (timeSinceMarkerPress < 200) {
+      console.log('🚫 Ignoring map interaction - marker was pressed', timeSinceMarkerPress, 'ms ago');
+      return;
+    }
+    
+    console.log('🗺️ Processing map interaction');
+    
     // Auto-save inline note before closing menu
     if (selectedLead.current && inlineNoteText.trim() !== '') {
       await autoSaveInlineNote();
@@ -2432,40 +2500,7 @@ export default function Tab() {
     }
   }
 
-  // Add this near the end of your component, just before the final return statement
-  const renderLoadingOverlay = () => {
-    if (!isLoading) return null;
 
-    return (
-      <View 
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000,
-        }}
-      >
-        <View 
-          style={{
-            backgroundColor: 'white',
-            padding: 20,
-            borderRadius: 10,
-            alignItems: 'center',
-          }}
-        >
-          <ActivityIndicator size="large" color="#0000ff" />
-          {loadingMessage ? (
-            <Text style={{ marginTop: 10, color: '#333' }}>{loadingMessage}</Text>
-          ) : null}
-        </View>
-      </View>
-    );
-  };
 
   // Optimize marker rendering for large datasets
   const renderMapMarkers = useMemo(() => {
@@ -2508,10 +2543,16 @@ export default function Tab() {
             key={`${lead.id}-${lead.status}`}
             coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
             pinColor={getPinColor(lead.status, lead.isTeamLead)}
-            onPress={(event) => showMenu(lead, event)}
+            onPress={(event) => {
+              console.log('📱 Marker onPress fired for lead:', lead.id);
+              event.stopPropagation && event.stopPropagation();
+              showMenu(lead, event);
+            }}
+            onLongPress={() => handleMarkerLongPress(lead)}
             onDragStart={() => handleDragStart(lead)}
             onDragEnd={(e) => handleDragEnd(lead, e)}
             draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
+            tracksViewChanges={false}
           />
         );
       });
@@ -2523,10 +2564,16 @@ export default function Tab() {
           key={`${lead.id}-${lead.status}`}
           coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
           pinColor={getPinColor(lead.status, lead.isTeamLead)}
-          onPress={(event) => showMenu(lead, event)}
+          onPress={(event) => {
+            console.log('📱 Marker onPress fired for lead:', lead.id);
+            event.stopPropagation && event.stopPropagation();
+            showMenu(lead, event);
+          }}
+          onLongPress={() => handleMarkerLongPress(lead)}
           onDragStart={() => handleDragStart(lead)}
           onDragEnd={(e) => handleDragEnd(lead, e)}
           draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
+          tracksViewChanges={false}
         />
       ));
     }
@@ -2553,6 +2600,7 @@ export default function Tab() {
         }}
         className="flex-1"
         onPress={(e) => {
+          console.log('🗺️ Map onPress fired');
           // Don't handle map press if big menu is open or marker long press is active
           if (!bigMenu && !isMarkerLongPressing) {
             handleMapInteraction();
@@ -2580,6 +2628,9 @@ export default function Tab() {
           }
         }}
         moveOnMarkerPress={false}
+        loadingEnabled={true}
+        loadingIndicatorColor="#000000"
+        loadingBackgroundColor="#ffffff"
         showsUserLocation={locationPermission}
         scrollEnabled={!isDrawing && !isDrawingMode && !isModalOpen}
         zoomEnabled={!isModalOpen}
@@ -3733,7 +3784,6 @@ export default function Tab() {
                 style: "destructive",
                 onPress: async () => {
                     try {
-                        setLoading(true, 'Deleting lead...');
                         // First delete related notes
                         const { error: notesError } = await supabase
                             .from('notes')
@@ -3777,7 +3827,7 @@ export default function Tab() {
                         console.error('Error in deleteLead:', error);
                         Alert.alert('Error', 'An unexpected error occurred while deleting the lead');
                     } finally {
-                        setLoading(false);
+                        // Delete operation completed
                     }
                 }
             }
@@ -3787,14 +3837,31 @@ export default function Tab() {
 
   return (
     <View style={{ flex: 1 }}>
-      {memoizedMap}
-      {renderStatusMenu()}
-      {renderNoteModal()}
-      {renderFullNotesModal()}
+      <View style={{ flex: 1 }}>
+        {memoizedMap}
+        
+        {/* White background overlay when keyboard is visible */}
+        {isKeyboardVisible && (
+          <View 
+            style={{
+              position: 'absolute',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: keyboardHeight + 150, // Extra height to cover menu area
+              backgroundColor: 'white',
+              zIndex: 40, // Below the menu but above the map
+            }}
+          />
+        )}
+        
+        {renderStatusMenu()}
+        {renderNoteModal()}
+        {renderFullNotesModal()}
       {/* Remove the first Create New Lead button */}
 
       {/* Hamburger Menu */}
-      <View className="absolute top-16 left-4 z-10">
+      <View className="absolute top-8 left-4 z-10">
         <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
           <View className="w-6 h-5 justify-between">
             <View className="w-full h-0.5 bg-gray-800 opacity-25" />
@@ -3806,15 +3873,15 @@ export default function Tab() {
       
       {/* Manager Mode Badge */}
       {isManager && managerModeEnabled && (
-        <View className="absolute top-16 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
+        <View className="absolute top-8 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
           <Text className="text-white font-semibold text-xs">Manager Mode</Text>
         </View>
       )}
       
       {/* Territory Management Button (Only visible in manager mode) */}
       {isManager && managerModeEnabled && (
-        <TouchableOpacity 
-          className="absolute top-26 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
+                <TouchableOpacity
+          className="absolute top-16 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
           onPress={() => {
             setIsTerritoriesModalVisible(true);
             setIsModalMinimized(false);
@@ -3882,7 +3949,7 @@ export default function Tab() {
         backgroundColor="#121212" // Dark background for the status bar
       />
 
-      <View className="flex-1 bg-gray-900 px-6 pt-16 pb-8">
+      <View className="flex-1 bg-gray-900 px-6 pt-8 pb-8">
         {/* Header */}
         <View className="flex-row justify-between items-center mb-6">
           <Text className="text-xl font-semibold text-white">Settings</Text>
@@ -4143,7 +4210,7 @@ export default function Tab() {
 
     {/* Crosshair */}
     {!startSaleModal && (
-      <View className="absolute top-16 right-4 items-center">
+      <View className="absolute top-6 right-4 items-center">
         <TouchableOpacity
           className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
           onPress={centerMapOnUserLocation}
@@ -4155,9 +4222,13 @@ export default function Tab() {
 
     {/* Filter Button */}
     {!startSaleModal && (
-      <View className="absolute top-28 right-4 items-center">
+      <View className="absolute top-20 right-4 items-center">
         <TouchableOpacity
-          className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
+          className={`p-0.5 rounded-full border border-black ${
+            selectedStatuses.length < 6 
+              ? 'bg-blue-600 opacity-90' 
+              : 'bg-transparent opacity-25'
+          }`}
           onPress={() => setIsFiltersModalVisible(true)}
         >
           <Image source={require('../../assets/images/funnel-icon.png')} className="w-7 h-7" />
@@ -4167,7 +4238,7 @@ export default function Tab() {
 
     {/* Manager Mode Button - Only visible for managers */}
     {!startSaleModal && isManager && (
-      <View className="absolute top-40 right-4 items-center">
+      <View className="absolute top-36 right-4 items-center">
         <TouchableOpacity
           className={`p-0.5 rounded-full border border-black ${
             managerModeEnabled 
@@ -4675,7 +4746,8 @@ export default function Tab() {
       </TouchableOpacity>
     )}
 
-    {renderLoadingOverlay()}
-  </View>
-);
+
+      </View>
+    </View>
+  );
 }
