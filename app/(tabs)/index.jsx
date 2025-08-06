@@ -2517,6 +2517,7 @@ export default function Tab() {
             <Marker
               key={`cluster-${cluster_id}`}
               coordinate={coordinate}
+              anchor={{ x: 0.5, y: 0.5 }}
               onPress={() => {
                 const expansionZoom = supercluster.getClusterExpansionZoom(cluster_id);
                 const newRegion = {
@@ -2543,6 +2544,7 @@ export default function Tab() {
             key={`${lead.id}-${lead.status}`}
             coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
             pinColor={getPinColor(lead.status, lead.isTeamLead)}
+            anchor={{ x: 0.5, y: 1 }}
             onPress={(event) => {
               console.log('📱 Marker onPress fired for lead:', lead.id);
               event.stopPropagation && event.stopPropagation();
@@ -2564,6 +2566,7 @@ export default function Tab() {
           key={`${lead.id}-${lead.status}`}
           coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
           pinColor={getPinColor(lead.status, lead.isTeamLead)}
+          anchor={{ x: 0.5, y: 1 }}
           onPress={(event) => {
             console.log('📱 Marker onPress fired for lead:', lead.id);
             event.stopPropagation && event.stopPropagation();
@@ -2585,6 +2588,7 @@ export default function Tab() {
         ref={mapRef}
         provider={PROVIDER_GOOGLE}
         initialRegion={initialRegion}
+        edgePadding={{ top: 50, right: 50, bottom: 50, left: 50 }}
         onRegionChange={() => {
           // Hide the +New Lead button immediately when user starts panning/zooming
           if (!isMarkerLongPressing && !bigMenu) {
