@@ -16,6 +16,7 @@ import {
   Keyboard,
   Animated
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
 import { useClusterer } from 'react-native-clusterer';
@@ -1169,6 +1170,25 @@ export default function Tab() {
         } else {
             console.log('✅ Note saved successfully!');
             console.log('📊 Insert result:', insertResult);
+            
+            // Update the lead in the leads array with the new note
+            const savedNote = { 
+              note: trimmedNote, 
+              created_at: new Date().toISOString() 
+            };
+            
+            setLeads(prevLeads => 
+              prevLeads.map(lead => 
+                lead.id === leadId 
+                  ? { ...lead, mostRecentNote: savedNote }
+                  : lead
+              )
+            );
+            
+            // Also update the selectedLead ref if it matches
+            if (selectedLead.current && selectedLead.current.id === leadId) {
+              selectedLead.current = { ...selectedLead.current, mostRecentNote: savedNote };
+            }
         }
     } catch (error) {
         console.error('❌ Unexpected error adding note:', error);
@@ -1248,6 +1268,25 @@ export default function Tab() {
         } else {
             console.log('✅ Inline note saved successfully!');
             console.log('📊 Insert result:', insertResult);
+            
+            // Update the lead in the leads array with the new note
+            const savedNote = { 
+              note: trimmedNote, 
+              created_at: new Date().toISOString() 
+            };
+            
+            setLeads(prevLeads => 
+              prevLeads.map(lead => 
+                lead.id === leadId 
+                  ? { ...lead, mostRecentNote: savedNote }
+                  : lead
+              )
+            );
+            
+            // Also update the selectedLead ref if it matches
+            if (selectedLead.current && selectedLead.current.id === leadId) {
+              selectedLead.current = { ...selectedLead.current, mostRecentNote: savedNote };
+            }
         }
     } catch (error) {
         console.error('❌ Unexpected error adding inline note:', error);
@@ -1679,6 +1718,18 @@ export default function Tab() {
     getClusteringOptions
   );
 
+  function getStatusMarkerImage(statusIndex) {
+    const statusIcons = [
+      require('../../assets/images/marker_new_purple_tight.png'),      // New
+      require('../../assets/images/marker_gone_gold_tight.png'),       // Gone
+      require('../../assets/images/marker_later_dodgerblue_tight.png'), // Later
+      require('../../assets/images/marker_nope_tomato_tight.png'),     // Nope
+      require('../../assets/images/marker_sold_limegreen_tight.png'),  // Sold
+      require('../../assets/images/marker_return_darkblue_tight.png')  // Return
+    ];
+    return statusIcons[statusIndex] || statusIcons[0];
+  }
+
   function renderDrawer() {
     if (!selectedLead.current) return null;
     
@@ -1823,9 +1874,10 @@ export default function Tab() {
                           updateLeadStatus(selectedLead.current.id, index);
                         }}
                       >
-                        <View 
-                          style={{ backgroundColor: colors[index] }} 
-                          className="h-6 w-6 mb-2 rounded-full" 
+                        <Image 
+                          source={getStatusMarkerImage(index)}
+                          className="h-8 w-8 mb-2"
+                          resizeMode="contain"
                         />
                         <Text className="text-sm text-center font-medium text-gray-900">{status}</Text>
                       </TouchableOpacity>
@@ -2818,7 +2870,6 @@ export default function Tab() {
           <Marker
             key={`${lead.id}-${lead.status}`}
             coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-            pinColor={getPinColor(lead.status, lead.isTeamLead)}
             anchor={{ x: 0.5, y: 1 }}
             onPress={(event) => {
               console.log('📱 Marker onPress fired for lead:', lead.id);
@@ -2830,7 +2881,17 @@ export default function Tab() {
             onDragEnd={(e) => handleDragEnd(lead, e)}
             draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
             tracksViewChanges={false}
-          />
+          >
+            <Image 
+              source={getStatusMarkerImage(lead.status)}
+              style={{ 
+                width: 32, 
+                height: 32,
+                opacity: (lead.isTeamLead && isManager && managerModeEnabled) ? 0.7 : 1.0
+              }}
+              resizeMode="contain"
+            />
+          </Marker>
         );
       });
     } else {
@@ -2840,7 +2901,6 @@ export default function Tab() {
         <Marker
           key={`${lead.id}-${lead.status}`}
           coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-          pinColor={getPinColor(lead.status, lead.isTeamLead)}
           anchor={{ x: 0.5, y: 1 }}
           onPress={(event) => {
             console.log('📱 Marker onPress fired for lead:', lead.id);
@@ -2852,7 +2912,17 @@ export default function Tab() {
           onDragEnd={(e) => handleDragEnd(lead, e)}
           draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
           tracksViewChanges={false}
-        />
+        >
+          <Image 
+            source={getStatusMarkerImage(lead.status)}
+            style={{ 
+              width: 32, 
+              height: 32,
+              opacity: (lead.isTeamLead && isManager && managerModeEnabled) ? 0.7 : 1.0
+            }}
+            resizeMode="contain"
+          />
+        </Marker>
       ));
     }
   }, [clusteredPoints, visibleLeads, isClustering, isManager, managerModeEnabled]);
@@ -4137,46 +4207,49 @@ export default function Tab() {
         {renderDrawer()}
         {renderNoteModal()}
         {renderFullNotesModal()}
-      {/* Remove the first Create New Lead button */}
+        
+        {/* Safe Area for Top Buttons - only affects top edge */}
+        <SafeAreaView style={{ position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingTop: 12 }} edges={['top']}>
+          {/* Remove the first Create New Lead button */}
 
-      {/* Hamburger Menu */}
-      <View className="absolute top-8 left-4 z-10">
-        <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
-          <View className="w-6 h-5 justify-between">
-            <View className="w-full h-0.5 bg-gray-800 opacity-25" />
-            <View className="w-full h-0.5 bg-gray-800 opacity-25" />
-            <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+          {/* Hamburger Menu */}
+          <View className="absolute top-2 left-4 z-10">
+            <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
+              <View className="w-6 h-5 justify-between">
+                <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+                <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+                <View className="w-full h-0.5 bg-gray-800 opacity-25" />
+              </View>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </View>
-      
-      {/* Manager Mode Badge */}
-      {isManager && managerModeEnabled && (
-        <View className="absolute top-8 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
-          <Text className="text-white font-semibold text-xs">Manager Mode</Text>
-        </View>
-      )}
-      
-      {/* Territory Management Button (Only visible in manager mode) */}
-      {isManager && managerModeEnabled && (
-                <TouchableOpacity
-          className="absolute top-16 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
-          onPress={() => {
-            setIsTerritoriesModalVisible(true);
-            setIsModalMinimized(false);
-            fetchTeamUsers();
-          }}
-        >
-          <Image 
-            source={require('../../assets/images/territory.png')} 
-            className="w-6 h-6" 
-          />
-        </TouchableOpacity>
-      )}
+          
+          {/* Manager Mode Badge */}
+          {isManager && managerModeEnabled && (
+            <View className="absolute top-2 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
+              <Text className="text-white font-semibold text-xs">Manager Mode</Text>
+            </View>
+          )}
+          
+          {/* Territory Management Button (Only visible in manager mode) */}
+          {isManager && managerModeEnabled && (
+            <TouchableOpacity
+              className="absolute top-10 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
+              onPress={() => {
+                setIsTerritoriesModalVisible(true);
+                setIsModalMinimized(false);
+                fetchTeamUsers();
+              }}
+            >
+              <Image 
+                source={require('../../assets/images/territory.png')} 
+                className="w-6 h-6" 
+              />
+            </TouchableOpacity>
+          )}
 
-      {/* Drawing Mode Instructions */}
-      {isDrawingMode && (
-        <View className="absolute top-16 left-4 right-4 bg-white p-4 rounded-lg shadow-lg z-20">
+          {/* Drawing Mode Instructions */}
+          {isDrawingMode && (
+            <View className="absolute top-10 left-4 right-4 bg-white p-4 rounded-lg shadow-lg z-20">
           <Text className="text-lg font-semibold text-gray-900 mb-2">Territory Drawing Mode</Text>
           <Text className="text-gray-700 text-sm mb-2">
             Tap on the map to add boundary points ({polygonCoordinates.length} points added)
@@ -4213,6 +4286,56 @@ export default function Tab() {
           </View>
         </View>
       )}
+
+          {/* Right-side buttons */}
+          {/* Crosshair */}
+          {!startSaleModal && (
+            <View className="absolute top-2 right-4 items-center">
+              <TouchableOpacity
+                className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
+                onPress={centerMapOnUserLocation}
+              >
+                <Image source={require('../../assets/images/crosshair.png')} className="w-7 h-7" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Filter Button */}
+          {!startSaleModal && (
+            <View className="absolute top-12 right-4 items-center">
+              <TouchableOpacity
+                className={`p-0.5 rounded-full border border-black ${
+                  selectedStatuses.length < 6 
+                    ? 'bg-blue-600 opacity-90' 
+                    : 'bg-transparent opacity-25'
+                }`}
+                onPress={() => setIsFiltersModalVisible(true)}
+              >
+                <Image source={require('../../assets/images/funnel-icon.png')} className="w-7 h-7" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Manager Mode Button - Only visible for managers */}
+          {!startSaleModal && isManager && (
+            <View className="absolute top-24 right-4 items-center">
+              <TouchableOpacity
+                className={`p-0.5 rounded-full border border-black ${
+                  managerModeEnabled 
+                    ? 'bg-purple-600 opacity-90' 
+                    : 'bg-transparent opacity-25'
+                }`}
+                onPress={() => setManagerModeEnabled(!managerModeEnabled)}
+              >
+                <View className="w-7 h-7 items-center justify-center">
+                  <Text className={`text-xs font-bold ${
+                    managerModeEnabled ? 'text-white' : 'text-black'
+                  }`}>M</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
+          )}
+        </SafeAreaView>
       
       {/* Settings Modal */}
       <Modal
@@ -4487,53 +4610,7 @@ export default function Tab() {
       </View>
     </Modal>
 
-    {/* Crosshair */}
-    {!startSaleModal && (
-      <View className="absolute top-6 right-4 items-center">
-        <TouchableOpacity
-          className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
-          onPress={centerMapOnUserLocation}
-        >
-          <Image source={require('../../assets/images/crosshair.png')} className="w-7 h-7" />
-        </TouchableOpacity>
-      </View>
-    )}
 
-    {/* Filter Button */}
-    {!startSaleModal && (
-      <View className="absolute top-20 right-4 items-center">
-        <TouchableOpacity
-          className={`p-0.5 rounded-full border border-black ${
-            selectedStatuses.length < 6 
-              ? 'bg-blue-600 opacity-90' 
-              : 'bg-transparent opacity-25'
-          }`}
-          onPress={() => setIsFiltersModalVisible(true)}
-        >
-          <Image source={require('../../assets/images/funnel-icon.png')} className="w-7 h-7" />
-        </TouchableOpacity>
-      </View>
-    )}
-
-    {/* Manager Mode Button - Only visible for managers */}
-    {!startSaleModal && isManager && (
-      <View className="absolute top-36 right-4 items-center">
-        <TouchableOpacity
-          className={`p-0.5 rounded-full border border-black ${
-            managerModeEnabled 
-              ? 'bg-purple-600 opacity-90' 
-              : 'bg-transparent opacity-25'
-          }`}
-          onPress={() => setManagerModeEnabled(!managerModeEnabled)}
-        >
-          <View className="w-7 h-7 items-center justify-center">
-            <Text className={`text-xs font-bold ${
-              managerModeEnabled ? 'text-white' : 'text-black'
-            }`}>M</Text>
-          </View>
-        </TouchableOpacity>
-      </View>
-    )}
     {/* Start Sale Modal */}
     {startSaleModal && (
   <Modal
