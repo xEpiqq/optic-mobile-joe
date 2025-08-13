@@ -24,6 +24,16 @@ import { WebView } from 'react-native-webview';
 import { useSupabase } from '../../contexts/SupabaseContext';
 import { GOOGLE_MAPS_API_KEY } from '../../config';
 import 'react-native-url-polyfill/auto';
+import ReanimatedAnimated, { 
+  useSharedValue, 
+  useAnimatedStyle, 
+  useAnimatedGestureHandler,
+  withSpring,
+  runOnJS,
+  interpolate,
+  Extrapolate
+} from 'react-native-reanimated';
+import { PanGestureHandler } from 'react-native-gesture-handler';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const CREDENTIAL_TYPE_KEY = 'CREDENTIAL_TYPE'; 
@@ -118,7 +128,138 @@ export default function Tab() {
   const [shouldAutoCenter, setShouldAutoCenter] = useState(true); // Track if we should auto-center on location
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const menuBottomPosition = useRef(new Animated.Value(0)).current;
+  
+  // Drawer states
+  const drawerTranslateY = useSharedValue(0);
+  const keyboardHeightShared = useSharedValue(0); // Shared value for keyboard height
+  const drawerHeight = height * 0.8; // Maximum drawer height
+  const COLLAPSED_HEIGHT = 280; // Collapsed drawer height 
+  const EXPANDED_HEIGHT = drawerHeight; // Fully expanded height
+  const [drawerState, setDrawerState] = useState('hidden'); // 'hidden', 'collapsed', 'expanded'
+
+  // Spring config for less bouncy animations
+  const springConfig = {
+    damping: 20,
+    stiffness: 300,
+    mass: 0.8,
+    overshootClamping: false,
+    restDisplacementThreshold: 0.01,
+    restSpeedThreshold: 0.01,
+  };
+
+  // Drawer position helper functions
+  const animateDrawerTo = (position) => {
+    'worklet';
+    const currentKeyboardHeight = keyboardHeightShared.value;
+    
+    switch(position) {
+      case 'hidden':
+        drawerTranslateY.value = withSpring(EXPANDED_HEIGHT, springConfig);
+        runOnJS(setDrawerState)('hidden');
+        break;
+      case 'collapsed':
+        const collapsedY = currentKeyboardHeight > 0 
+          ? EXPANDED_HEIGHT - COLLAPSED_HEIGHT - currentKeyboardHeight
+          : EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
+        drawerTranslateY.value = withSpring(collapsedY, springConfig);
+        runOnJS(setDrawerState)('collapsed');
+        break;
+      case 'expanded':
+        // Don't adjust for keyboard when expanded - plenty of space visible
+        drawerTranslateY.value = withSpring(0, springConfig);
+        runOnJS(setDrawerState)('expanded');
+        break;
+    }
+  };
+
+  // Gesture handler for drawer
+  const gestureHandler = useAnimatedGestureHandler({
+    onStart: (_, context) => {
+      context.startY = drawerTranslateY.value;
+      context.keyboardHeight = keyboardHeightShared.value;
+      context.startTranslationY = 0;
+    },
+    onActive: (event, context) => {
+      // Only handle vertical gestures that are significant enough
+      const absTranslationY = Math.abs(event.translationY);
+      const absTranslationX = Math.abs(event.translationX);
+      
+      // If horizontal movement is more than vertical, ignore (could be scrolling)
+      if (absTranslationX > absTranslationY && absTranslationY < 10) {
+        return;
+      }
+      
+      // If movement is too small, ignore to allow scrolling
+      if (absTranslationY < 5) {
+        return;
+      }
+      
+      const newY = context.startY + event.translationY;
+      const minY = context.keyboardHeight > 0 ? -context.keyboardHeight : 0;
+      // Constrain movement between minY and EXPANDED_HEIGHT
+      drawerTranslateY.value = Math.max(minY, Math.min(EXPANDED_HEIGHT, newY));
+    },
+    onEnd: (event) => {
+      const velocity = event.velocityY;
+      const currentY = drawerTranslateY.value;
+      const kbHeight = keyboardHeightShared.value;
+      const absTranslationY = Math.abs(event.translationY);
+      
+      // If very small movement, don't trigger state change
+      if (absTranslationY < 10 && Math.abs(velocity) < 200) {
+        return;
+      }
+      
+      // Adjust target positions based on keyboard visibility
+      const expandedTarget = 0; // Expanded doesn't adjust for keyboard
+      const collapsedTarget = kbHeight > 0 ? EXPANDED_HEIGHT - COLLAPSED_HEIGHT - kbHeight : EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
+      
+      // Determine which position to snap to based on current position and velocity
+      if (velocity > 500) {
+        // Fast downward swipe - collapse or hide
+        if (currentY < (expandedTarget + collapsedTarget) / 2) {
+          animateDrawerTo('collapsed');
+        } else {
+          animateDrawerTo('hidden');
+        }
+      } else if (velocity < -500) {
+        // Fast upward swipe - expand
+        animateDrawerTo('expanded');
+      } else {
+        // Snap to nearest position based on current Y
+        const midPoint1 = (expandedTarget + collapsedTarget) / 2;
+        const midPoint2 = (collapsedTarget + EXPANDED_HEIGHT) / 2;
+        
+        if (currentY < midPoint1) {
+          animateDrawerTo('expanded');
+        } else if (currentY < midPoint2) {
+          animateDrawerTo('collapsed');
+        } else {
+          animateDrawerTo('hidden');
+        }
+      }
+    },
+  });
+
+  // Animated styles for drawer
+  const drawerAnimatedStyle = useAnimatedStyle(() => {
+    return {
+      transform: [{ translateY: drawerTranslateY.value }],
+    };
+  });
+
+  // Animated styles for backdrop opacity
+  const backdropAnimatedStyle = useAnimatedStyle(() => {
+    const opacity = interpolate(
+      drawerTranslateY.value,
+      [0, EXPANDED_HEIGHT - COLLAPSED_HEIGHT],
+      [0.5, 0],
+      Extrapolate.CLAMP
+    );
+    return {
+      opacity,
+    };
+  });
 
   // Keyboard event listeners
   useEffect(() => {
@@ -128,13 +269,14 @@ export default function Tab() {
         const height = event.endCoordinates.height;
         setKeyboardHeight(height);
         setIsKeyboardVisible(true);
+        keyboardHeightShared.value = height; // Update shared value
         
-        // Animate menu position
-        Animated.timing(menuBottomPosition, {
-          toValue: height,
-          duration: Platform.OS === 'ios' ? event.duration || 250 : 250,
-          useNativeDriver: false,
-        }).start();
+        // Adjust drawer position when keyboard appears
+        if (drawerState === 'collapsed') {
+          // Move the drawer up by keyboard height to keep it visible
+          drawerTranslateY.value = withSpring(EXPANDED_HEIGHT - COLLAPSED_HEIGHT - height, springConfig);
+        }
+        // Don't adjust if expanded - there's already plenty of visible space
       }
     );
 
@@ -143,13 +285,13 @@ export default function Tab() {
       (event) => {
         setKeyboardHeight(0);
         setIsKeyboardVisible(false);
+        keyboardHeightShared.value = 0; // Update shared value
         
-        // Animate menu position back to bottom
-        Animated.timing(menuBottomPosition, {
-          toValue: 0,
-          duration: Platform.OS === 'ios' ? event?.duration || 250 : 250,
-          useNativeDriver: false,
-        }).start();
+        // Restore drawer to original position when keyboard hides
+        if (drawerState === 'collapsed') {
+          drawerTranslateY.value = withSpring(EXPANDED_HEIGHT - COLLAPSED_HEIGHT, springConfig);
+        }
+        // Don't need to restore expanded state since it wasn't moved
       }
     );
 
@@ -157,7 +299,14 @@ export default function Tab() {
       keyboardWillShowListener?.remove();
       keyboardWillHideListener?.remove();
     };
-  }, [menuBottomPosition]);
+  }, [drawerState, EXPANDED_HEIGHT, COLLAPSED_HEIGHT]);
+
+  // Initialize drawer position
+  useEffect(() => {
+    // Start with drawer in collapsed position for testing
+    drawerTranslateY.value = EXPANDED_HEIGHT - COLLAPSED_HEIGHT;
+    setDrawerState('collapsed');
+  }, []);
 
   // normal stuff + fetch credential type
   useEffect(() => {
@@ -770,6 +919,9 @@ export default function Tab() {
     console.log('✅ Lead data set. selectedLead.current:', selectedLead.current?.id);
     console.log('✅ leadAddress:', lead.fullAddress);
     
+    // Show drawer in collapsed state
+    animateDrawerTo('collapsed');
+    
     // Force a re-render to ensure the menu appears
     setDummyRender(prev => !prev);
   }
@@ -786,10 +938,12 @@ export default function Tab() {
     
     selectedLead.current = lead;
     setSelectedLeadId(lead.id);  // Set the selected lead ID
-    setBigMenu(true);
+    
+    // Expand drawer to show start sale content instead of opening modal
+    animateDrawerTo('expanded');
     setIsModalOpen(true);
     
-    // Clear the flag after the modal is properly opened
+    // Clear the flag after the drawer is properly expanded
     setTimeout(() => {
       setIsMarkerLongPressing(false);
       console.log('Marker long press flag cleared');
@@ -825,9 +979,8 @@ export default function Tab() {
     // Save the lead data before closing
     await saveLeadData();
     
-    setBigMenu(false);
-    selectedLead.current = null;
-    setSelectedLeadId(null);  // Clear the selected lead ID
+    // Collapse drawer instead of closing modal
+    animateDrawerTo('collapsed');
     setIsModalOpen(false);
     setIsMarkerLongPressing(false); // Clear the marker long press flag
     firstName.current = '';
@@ -1113,7 +1266,7 @@ export default function Tab() {
 
   async function startSale() {
     setStartSaleModal(true);
-    setBigMenu(false);
+    // Keep drawer expanded to show the WebView modal
 
     if (!recentLead.current?.id) return console.error('No recent lead found.');
 
@@ -1526,143 +1679,267 @@ export default function Tab() {
     getClusteringOptions
   );
 
-  function renderStatusMenu() {
+  function renderDrawer() {
     if (!selectedLead.current) return null;
+    
+    console.log('🎨 Rendering drawer with state:', drawerState, 'translateY:', drawerTranslateY.value);
+    
     const statuses = ['New', 'Gone', 'Later', 'Nope', 'Sold', 'Return'];
     const colors = ['#800080', '#FFD700', '#1E90FF', '#FF6347', '#32CD32', '#00008B'];
 
     return (
       <>
-        {!bigMenu && (
-          <Animated.View 
-            className="absolute left-0 right-0 bg-white rounded-t-xl shadow-lg z-50 px-4 py-4"
+        {/* Backdrop when drawer is expanded */}
+        {drawerState === 'expanded' && (
+          <TouchableOpacity
             style={{
-              bottom: menuBottomPosition,
-              shadowColor: '#000',
-              shadowOffset: { width: 0, height: -2 },
-              shadowOpacity: 0.1,
-              shadowRadius: 8,
-              elevation: 8,
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 40,
             }}
+            activeOpacity={1}
+            onPress={() => animateDrawerTo('collapsed')}
           >
-            {/* Address Section */}
-            {leadAddress && (
-              <View className="mb-4">
-                <View className="flex-row items-center justify-between">
-                  <View className="flex-row items-center flex-1">
-                    {/* Check if this is a new lead being created */}
-                    {newLeadId && selectedLead.current?.id === newLeadId ? (
-                      <View className="flex-1">
-                        <Text className="text-xs text-gray-600 font-medium mb-1">Edit Address:</Text>
-                        <TextInput
-                          className="border border-gray-300 rounded-lg p-2 text-black font-bold text-base flex-1"
-                          value={editableAddress}
-                          onChangeText={setEditableAddress}
-                          multiline
-                          numberOfLines={2}
-                          placeholder="Enter lead address"
-                        />
-                      </View>
-                    ) : (
-                      <>
-                        <Text className="text-black font-bold text-base">{leadAddress}</Text>
-                        <TouchableOpacity onPress={openMaps} className="p-2 ml-2">
-                          <Image
-                            source={require('../../assets/images/directions.png')}
-                            className="w-7 h-7 tint-blue-500"
-                          />
-                        </TouchableOpacity>
-                      </>
-                    )}
-                  </View>
-                  <View className="flex-row items-center">
-                    {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
-                      <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-3">
-                        <Text className="text-white text-xs font-semibold">Team Lead</Text>
-                      </View>
-                    )}
-                    {/* Show Save Lead button for new leads, Start Sale for existing */}
-                    {newLeadId && selectedLead.current?.id === newLeadId ? (
-                      <TouchableOpacity 
-                        onPress={saveNewLead} 
-                        className="bg-blue-500 px-3 py-2 rounded-lg"
-                      >
-                        <Text className="text-white text-sm font-semibold">Save Lead</Text>
-                      </TouchableOpacity>
-                    ) : (
-                      <TouchableOpacity 
-                        onPress={() => showBigMenu(selectedLead.current)} 
-                        className="bg-green-500 px-3 py-2 rounded-lg"
-                      >
-                        <Text className="text-white text-sm font-semibold">Start Sale</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                </View>
-              </View>
-            )}
-
-            {/* Status Options Section */}
-            <View className="mb-4">
-              <View className="flex-row justify-around">
-                {statuses.map((status, index) => {
-                  const isCurrentStatus = selectedLead.current.status === index;
-                  return (
-                    <TouchableOpacity
-                      key={index}
-                      className={`items-center flex-1 mx-1 py-2 px-1 rounded-lg ${
-                        isCurrentStatus ? 'bg-gray-200' : 'bg-transparent'
-                      }`}
-                      onPress={() => {
-                        updateLeadStatus(selectedLead.current.id, index);
-                        // Remove the immediate modal closing - let handleMapInteraction handle it
-                      }}
-                    >
-                      <View 
-                        style={{ backgroundColor: colors[index] }} 
-                        className="h-4 w-full mb-2 rounded" 
-                      />
-                      <Text className="text-sm text-center font-medium text-gray-900">{status}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </View>
-            
-            {/* Inline Note Input Section */}
-            <View>
-              <Text className="text-xs text-gray-600 font-medium mb-2">Add Note:</Text>
-              <View className="flex-row items-start">
-                <View className="flex-1">
-                  <TextInput
-                    className="border border-gray-300 rounded-lg p-3 text-base bg-gray-50 min-h-20"
-                    multiline
-                    placeholder={recentNote ? `Recent Note: ${recentNote.note}` : "Add a note..."}
-                    value={inlineNoteText}
-                    onChangeText={setInlineNoteText}
-                    textAlignVertical="top"
-                    onFocus={() => {
-                      // Optional: Add any additional focus handling if needed
-                      console.log('📝 Note input focused');
-                    }}
-                    onBlur={() => {
-                      // Optional: Add any additional blur handling if needed
-                      console.log('📝 Note input blurred');
-                    }}
-                  />
-                </View>
-                {recentNote && (
-                  <TouchableOpacity 
-                    onPress={() => showFullNotesModal(selectedLead.current.id)}
-                    className="ml-2 mt-3"
-                  >
-                    <Text className="text-blue-500 text-lg font-bold">→</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </Animated.View>
+            <ReanimatedAnimated.View 
+              style={[
+                {
+                  flex: 1,
+                  backgroundColor: 'black',
+                },
+                backdropAnimatedStyle
+              ]}
+              pointerEvents="none"
+            />
+          </TouchableOpacity>
         )}
+
+        {/* Drawer Container */}
+        <PanGestureHandler onGestureEvent={gestureHandler}>
+          <ReanimatedAnimated.View
+            style={[
+              {
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                height: EXPANDED_HEIGHT,
+                minHeight: 300, // Ensure minimum visible height
+                backgroundColor: 'white',
+                borderTopLeftRadius: 16,
+                borderTopRightRadius: 16,
+                shadowColor: '#000',
+                shadowOffset: { width: 0, height: -2 },
+                shadowOpacity: 0.1,
+                shadowRadius: 8,
+                elevation: 8,
+                zIndex: 50,
+                bottom: 0,
+              },
+              drawerAnimatedStyle
+            ]}
+          >
+            {/* Drag Handle */}
+            <View className="items-center py-2">
+              <View className="w-10 h-1 bg-gray-300 rounded-full" />
+            </View>
+
+            <ScrollView 
+              className="flex-1 px-4" 
+              showsVerticalScrollIndicator={false}
+              scrollEnabled={drawerState === 'expanded'} // Only allow scrolling when fully expanded
+              bounces={false} // Disable bouncing to prevent interference with drawer gestures
+            >
+              {/* Lead Menu Content (Collapsed View) */}
+              {leadAddress && (
+                <View className="mb-4">
+                  <View className="flex-row items-center justify-between">
+                    <View className="flex-row items-center flex-1">
+                      {/* Check if this is a new lead being created */}
+                      {newLeadId && selectedLead.current?.id === newLeadId ? (
+                        <View className="flex-1">
+                          <Text className="text-xs text-gray-600 font-medium mb-1">Edit Address:</Text>
+                          <TextInput
+                            className="border border-gray-300 rounded-lg p-2 text-black font-bold text-base flex-1"
+                            value={editableAddress}
+                            onChangeText={setEditableAddress}
+                            multiline
+                            numberOfLines={2}
+                            placeholder="Enter lead address"
+                          />
+                        </View>
+                      ) : (
+                        <>
+                          <Text className="text-black font-bold text-base">{leadAddress}</Text>
+                          <TouchableOpacity onPress={openMaps} className="p-2 ml-2">
+                            <Image
+                              source={require('../../assets/images/directions.png')}
+                              className="w-7 h-7 tint-blue-500"
+                            />
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </View>
+                    <View className="flex-row items-center">
+                      {selectedLead.current.isTeamLead && isManager && managerModeEnabled && (
+                        <View className="bg-purple-500 rounded-full px-2 py-0.5 mr-3">
+                          <Text className="text-white text-xs font-semibold">Team Lead</Text>
+                        </View>
+                      )}
+                      {/* Show Save Lead button for new leads, Start Sale for existing */}
+                      {newLeadId && selectedLead.current?.id === newLeadId ? (
+                        <TouchableOpacity 
+                          onPress={saveNewLead} 
+                          className="bg-blue-500 px-3 py-2 rounded-lg"
+                        >
+                          <Text className="text-white text-sm font-semibold">Save Lead</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity 
+                          onPress={() => showBigMenu(selectedLead.current)} 
+                          className="bg-green-500 px-3 py-2 rounded-lg"
+                        >
+                          <Text className="text-white text-sm font-semibold">Start Sale</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                </View>
+              )}
+
+              {/* Status Options Section */}
+              <View className="mb-4">
+                <View className="flex-row justify-around">
+                  {statuses.map((status, index) => {
+                    const isCurrentStatus = selectedLead.current.status === index;
+                    return (
+                      <TouchableOpacity
+                        key={index}
+                        className={`items-center flex-1 mx-1 py-2 px-1 rounded-lg ${
+                          isCurrentStatus ? 'bg-gray-200' : 'bg-transparent'
+                        }`}
+                        onPress={() => {
+                          updateLeadStatus(selectedLead.current.id, index);
+                        }}
+                      >
+                        <View 
+                          style={{ backgroundColor: colors[index] }} 
+                          className="h-6 w-6 mb-2 rounded-full" 
+                        />
+                        <Text className="text-sm text-center font-medium text-gray-900">{status}</Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+              
+              {/* Inline Note Input Section */}
+              <View className="mb-6">
+                <Text className="text-xs text-gray-600 font-medium mb-2">Add Note:</Text>
+                <View className="flex-row items-start">
+                  <View className="flex-1">
+                    <TextInput
+                      className="border border-gray-300 rounded-lg p-3 text-base bg-gray-50 min-h-20"
+                      multiline
+                      placeholder={recentNote ? `Recent Note: ${recentNote.note}` : "Add a note..."}
+                      value={inlineNoteText}
+                      onChangeText={setInlineNoteText}
+                      textAlignVertical="top"
+                      onFocus={() => {
+                        console.log('📝 Note input focused');
+                      }}
+                      onBlur={() => {
+                        console.log('📝 Note input blurred');
+                      }}
+                    />
+                  </View>
+                  {recentNote && (
+                    <TouchableOpacity 
+                      onPress={() => showFullNotesModal(selectedLead.current.id)}
+                      className="ml-2 mt-3"
+                    >
+                      <Text className="text-blue-500 text-lg font-bold">→</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+
+              {/* Start Sale Content (Expanded View) */}
+              {drawerState === 'expanded' && (
+                <View className="border-t border-gray-200 pt-6">
+                  <Text className="text-xl font-bold mb-4 text-center">Start Sale</Text>
+                  
+                  {/* Lead Info Section */}
+                  <View className="mb-6">
+                    <Text className="text-lg font-semibold mb-3 text-gray-800">Lead Information</Text>
+                    <View className="space-y-3">
+                      <TextInput
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        placeholder="First Name"
+                        defaultValue={firstName.current}
+                        onChangeText={(text) => (firstName.current = text)}
+                        placeholderTextColor="#6B7280"
+                      />
+                      <TextInput
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        placeholder="Last Name"
+                        defaultValue={lastName.current}
+                        onChangeText={(text) => (lastName.current = text)}
+                        placeholderTextColor="#6B7280"
+                      />
+                      <TextInput
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        placeholder="DOB (MM/DD/YYYY)"
+                        defaultValue={formatDob(dob.current)}
+                        onChangeText={(text) => (dob.current = text)}
+                        keyboardType="numeric"
+                        placeholderTextColor="#6B7280"
+                        maxLength={10}
+                      />
+                      <TextInput
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        placeholder="Phone"
+                        defaultValue={phone.current}
+                        onChangeText={(text) => (phone.current = text)}
+                        keyboardType="phone-pad"
+                        placeholderTextColor="#6B7280"
+                      />
+                      <TextInput
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        placeholder="Email"
+                        defaultValue={email.current}
+                        onChangeText={(text) => (email.current = text)}
+                        keyboardType="email-address"
+                        placeholderTextColor="#6B7280"
+                        autoCapitalize="none"
+                      />
+                      <TouchableOpacity 
+                        onPress={() => deleteLead()}
+                        className="self-end p-2"
+                      >
+                        <Image
+                          source={require('../../assets/images/rubbish-bin-wheelie-outline-256.png')}
+                          className="w-8 h-8 tint-red-500"
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+
+                  {/* Start Sale Button */}
+                  <TouchableOpacity
+                    className="bg-blue-600 py-3 rounded-lg mt-6 items-center shadow mb-6"
+                    onPress={startSale}
+                    accessibilityLabel="Start Sale"
+                    accessible={true}
+                  >
+                    <Text className="text-white text-lg font-semibold">Start Sale</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </ScrollView>
+          </ReanimatedAnimated.View>
+        </PanGestureHandler>
       </>
     );
   }
@@ -2464,8 +2741,8 @@ export default function Tab() {
   }
 
   async function handleMapInteraction() {
-    // Don't interfere if we're in the middle of a marker long press or if big menu is open
-    if (isMarkerLongPressing || bigMenu) {
+    // Don't interfere if we're in the middle of a marker long press
+    if (isMarkerLongPressing) {
       return;
     }
     
@@ -2483,21 +2760,19 @@ export default function Tab() {
       await autoSaveInlineNote();
     }
     
-    // Close all modals except big menu
+    // Close all modals
     setIsNoteModalVisible(false);
     setIsFullNotesModalVisible(false);
     setIsModalOpen(false);
     
-    // Clear lead status only if big menu is not open
-    if (!bigMenu) {
-      selectedLead.current = null;
-      setSelectedLeadId(null);
-      setRecentNote(null);
-      setLeadAddress(null);
-      setMenuPosition({ x: 0, y: 0 });
-      setInlineNoteText(''); // Clear inline note text
-      setDummyRender((prev) => !prev);
-    }
+    // Hide drawer and clear lead status
+    animateDrawerTo('hidden');
+    selectedLead.current = null;
+    setSelectedLeadId(null);
+    setRecentNote(null);
+    setLeadAddress(null);
+    setInlineNoteText(''); // Clear inline note text
+    setDummyRender((prev) => !prev);
   }
 
 
@@ -3859,7 +4134,7 @@ export default function Tab() {
           />
         )}
         
-        {renderStatusMenu()}
+        {renderDrawer()}
         {renderNoteModal()}
         {renderFullNotesModal()}
       {/* Remove the first Create New Lead button */}
