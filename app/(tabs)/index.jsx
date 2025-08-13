@@ -62,7 +62,8 @@ export default function Tab() {
   const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
   const [saveMessage, setSaveMessage] = useState('');
   const [region, setRegion] = useState(initialRegion);
-  const [isClustering, setIsClustering] = useState(true);
+  // Clustering levels: 0 = no clustering, 1-4 = increasing clustering intensity
+  const [clusteringLevel, setClusteringLevel] = useState(4);
   const [isSatellite, setIsSatellite] = useState(false);
   const [isSettingsModalVisible, setIsSettingsModalVisible] = useState(false);
   const [isFiltersModalVisible, setIsFiltersModalVisible] = useState(false);
@@ -608,7 +609,17 @@ export default function Tab() {
         }));
       
       setLeads(formattedLeads);
-      console.log(`Successfully loaded ${formattedLeads.length} leads out of ${allLeadIds.length} total`);
+      console.log(`🎉 Successfully loaded ${formattedLeads.length} leads out of ${allLeadIds.length} total`);
+      
+      // Debug: Log a few sample leads
+      if (formattedLeads.length > 0) {
+        console.log('📍 Sample leads:', formattedLeads.slice(0, 3).map(lead => ({
+          id: lead.id,
+          status: lead.status,
+          lat: lead.latitude,
+          lng: lead.longitude
+        })));
+      }
       
       // Show success message for large datasets
       if (formattedLeads.length > 1000) {
@@ -705,18 +716,48 @@ export default function Tab() {
     setRegion(newRegion);
     saveMapState(newRegion);
 
-    // Optimize clustering based on zoom level and lead count
+    // Multi-level clustering (0-4) based on zoom level and lead count
     const leadCount = leads.length;
+    const latitudeDelta = newRegion.latitudeDelta;
+    
+    let newClusteringLevel = 0; // No clustering by default
+    
     if (leadCount > 5000) {
       // For very large datasets, use more aggressive clustering
-      setIsClustering(newRegion.latitudeDelta >= 0.05);
+      if (latitudeDelta >= 0.08) {
+        newClusteringLevel = 4; // Maximum clustering
+      } else if (latitudeDelta >= 0.05) {
+        newClusteringLevel = 3; // Heavy clustering
+      } else if (latitudeDelta >= 0.025) {
+        newClusteringLevel = 2; // Moderate clustering
+      } else if (latitudeDelta >= 0.01) {
+        newClusteringLevel = 1; // Light clustering
+      }
     } else if (leadCount > 1000) {
       // For large datasets, use moderate clustering
-      setIsClustering(newRegion.latitudeDelta >= 0.08);
+      if (latitudeDelta >= 0.12) {
+        newClusteringLevel = 4; // Maximum clustering
+      } else if (latitudeDelta >= 0.08) {
+        newClusteringLevel = 3; // Heavy clustering
+      } else if (latitudeDelta >= 0.04) {
+        newClusteringLevel = 2; // Moderate clustering
+      } else if (latitudeDelta >= 0.02) {
+        newClusteringLevel = 1; // Light clustering
+      }
     } else {
-      // For smaller datasets, use original clustering
-    setIsClustering(newRegion.latitudeDelta >= 0.1);
+      // For smaller datasets, use gentler clustering thresholds
+      if (latitudeDelta >= 0.15) {
+        newClusteringLevel = 4; // Maximum clustering
+      } else if (latitudeDelta >= 0.1) {
+        newClusteringLevel = 3; // Heavy clustering
+      } else if (latitudeDelta >= 0.05) {
+        newClusteringLevel = 2; // Moderate clustering
+      } else if (latitudeDelta >= 0.025) {
+        newClusteringLevel = 1; // Light clustering
+      }
     }
+    
+    setClusteringLevel(newClusteringLevel);
   }
 
   function getPinColor(status, isTeamLead) {
@@ -1663,7 +1704,18 @@ export default function Tab() {
     );
   }
 
-  const visibleLeads = useMemo(() => getVisibleLeads(), [leads, region, selectedStatuses]);
+  const visibleLeads = useMemo(() => {
+    const visible = getVisibleLeads();
+    // Only log occasionally to reduce console spam
+    if (Math.random() < 0.2) {
+      console.log('📍 Visible leads calculation:', {
+        totalLeads: leads.length,
+        visibleLeads: visible.length,
+        selectedStatuses: selectedStatuses.length
+      });
+    }
+    return visible;
+  }, [leads, region, selectedStatuses]);
 
   const geoJSONLeads = useMemo(() => {
     return visibleLeads.map((lead) => ({
@@ -1683,51 +1735,167 @@ export default function Tab() {
     }));
   }, [visibleLeads]);
 
-  // Optimize clustering parameters based on dataset size
+  // Optimize clustering parameters based on dataset size and clustering level
   const getClusteringOptions = useMemo(() => {
     const leadCount = leads.length;
     
-    if (leadCount > 5000) {
-      return {
-        minZoom: 0,
-        maxZoom: 15,
-        minPoints: 3, // Cluster more aggressively
-        radius: 50,   // Larger radius for more clustering
-      };
-    } else if (leadCount > 1000) {
-      return {
-        minZoom: 0,
-        maxZoom: 14,
-        minPoints: 2,
-        radius: 45,
-      };
+    // Base parameters for different clustering levels (0-4)
+    if (clusteringLevel === 4) { // Maximum clustering
+      if (leadCount > 5000) {
+        return {
+          minZoom: 0,
+          maxZoom: 13,
+          minPoints: 4, // Most aggressive clustering
+          radius: 60,   // Largest radius
+        };
+      } else if (leadCount > 1000) {
+        return {
+          minZoom: 0,
+          maxZoom: 12,
+          minPoints: 3,
+          radius: 55,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 11,
+          minPoints: 3,
+          radius: 50,
+        };
+      }
+    } else if (clusteringLevel === 3) { // Heavy clustering
+      if (leadCount > 5000) {
+        return {
+          minZoom: 0,
+          maxZoom: 15,
+          minPoints: 3, // Aggressive clustering
+          radius: 50,   // Large radius
+        };
+      } else if (leadCount > 1000) {
+        return {
+          minZoom: 0,
+          maxZoom: 14,
+          minPoints: 2,
+          radius: 45,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 12,
+          minPoints: 2,
+          radius: 40,
+        };
+      }
+    } else if (clusteringLevel === 2) { // Moderate clustering
+      if (leadCount > 5000) {
+        return {
+          minZoom: 0,
+          maxZoom: 16,
+          minPoints: 2, // Moderate clustering
+          radius: 40,   // Medium radius
+        };
+      } else if (leadCount > 1000) {
+        return {
+          minZoom: 0,
+          maxZoom: 15,
+          minPoints: 2,
+          radius: 35,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 14,
+          minPoints: 2,
+          radius: 30,
+        };
+      }
+    } else if (clusteringLevel === 1) { // Light clustering
+      if (leadCount > 5000) {
+        return {
+          minZoom: 0,
+          maxZoom: 18,
+          minPoints: 2, // Light clustering
+          radius: 30,   // Small radius
+        };
+      } else if (leadCount > 1000) {
+        return {
+          minZoom: 0,
+          maxZoom: 17,
+          minPoints: 2,
+          radius: 25,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 16,
+          minPoints: 2,
+          radius: 20,
+        };
+      }
     } else {
+      // No clustering (clusteringLevel === 0)
       return {
-      minZoom: 0,
-      maxZoom: 12,
-      minPoints: 2,
-      radius: 40,
+        minZoom: 20, // Effectively disable clustering
+        maxZoom: 20,
+        minPoints: 999,
+        radius: 10,
       };
     }
-  }, [leads.length]);
+  }, [leads.length, clusteringLevel]);
 
   const [clusteredPoints, supercluster] = useClusterer(
-    isClustering ? geoJSONLeads : [],
+    clusteringLevel > 0 ? geoJSONLeads : [],
     MAP_DIMENSIONS,
     region,
     getClusteringOptions
   );
 
+  // Pre-load and cache marker images for better performance
+  const statusIcons = useMemo(() => {
+    try {
+      const icons = [
+        require('../../assets/images/marker_new_purple_tight.png'),      // New - 0
+        require('../../assets/images/marker_gone_gold_tight.png'),       // Gone - 1
+        require('../../assets/images/marker_later_dodgerblue_tight.png'), // Later - 2
+        require('../../assets/images/marker_nope_tomato_tight.png'),     // Nope - 3
+        require('../../assets/images/marker_sold_limegreen_tight.png'),  // Sold - 4
+        require('../../assets/images/marker_return_darkblue_tight.png')  // Return - 5
+      ];
+      console.log('✅ Successfully loaded', icons.length, 'marker icons');
+      return icons;
+    } catch (error) {
+      console.error('❌ Error pre-loading marker images:', error);
+      return [];
+    }
+  }, []);
+
   function getStatusMarkerImage(statusIndex) {
-    const statusIcons = [
-      require('../../assets/images/marker_new_purple_tight.png'),      // New
-      require('../../assets/images/marker_gone_gold_tight.png'),       // Gone
-      require('../../assets/images/marker_later_dodgerblue_tight.png'), // Later
-      require('../../assets/images/marker_nope_tomato_tight.png'),     // Nope
-      require('../../assets/images/marker_sold_limegreen_tight.png'),  // Sold
-      require('../../assets/images/marker_return_darkblue_tight.png')  // Return
+    if (!statusIcons || statusIcons.length === 0) {
+      return null; // Fallback to default marker
+    }
+    
+    if (statusIndex < 0 || statusIndex >= statusIcons.length) {
+      return statusIcons[0] || null;
+    }
+    
+    const image = statusIcons[statusIndex];
+    if (!image) {
+      return statusIcons[0] || null;
+    }
+    
+    return image;
+  }
+
+  function getStatusColor(statusIndex) {
+    const statusColors = [
+      '#8B5CF6', // New - Purple
+      '#F59E0B', // Gone - Gold
+      '#3B82F6', // Later - Dodger Blue
+      '#EF4444', // Nope - Tomato Red
+      '#10B981', // Sold - Lime Green
+      '#1E40AF'  // Return - Dark Blue
     ];
-    return statusIcons[statusIndex] || statusIcons[0];
+    return statusColors[statusIndex] || statusColors[0];
   }
 
   function renderDrawer() {
@@ -2831,7 +2999,17 @@ export default function Tab() {
 
   // Optimize marker rendering for large datasets
   const renderMapMarkers = useMemo(() => {
-    if (isClustering) {
+    // Only log occasionally to reduce console spam
+    if (Math.random() < 0.1) {
+      console.log('🗺️ Rendering markers - Debug Info:', {
+        clusteringLevel,
+        clusteredPointsCount: clusteredPoints?.length || 0,
+        visibleLeadsCount: visibleLeads?.length || 0,
+        totalLeadsCount: leads?.length || 0
+      });
+    }
+
+    if (clusteringLevel > 0) {
       return clusteredPoints.map((point) => {
         if (point.properties.cluster) {
           const { cluster_id, point_count } = point.properties;
@@ -2865,12 +3043,14 @@ export default function Tab() {
           );
         }
 
-        const lead = point.properties;
+                const lead = point.properties;
+        const markerImage = getStatusMarkerImage(lead.status);
+        const fallbackColor = getStatusColor(lead.status);
+        
         return (
           <Marker
             key={`${lead.id}-${lead.status}`}
             coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-            anchor={{ x: 0.5, y: 1 }}
             onPress={(event) => {
               console.log('📱 Marker onPress fired for lead:', lead.id);
               event.stopPropagation && event.stopPropagation();
@@ -2880,52 +3060,59 @@ export default function Tab() {
             onDragStart={() => handleDragStart(lead)}
             onDragEnd={(e) => handleDragEnd(lead, e)}
             draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
+            pinColor={!markerImage ? fallbackColor : undefined}
+            opacity={(lead.isTeamLead && isManager && managerModeEnabled) ? 0.7 : 1.0}
             tracksViewChanges={false}
+            anchor={{ x: 0.5, y: 1 }}
           >
-            <Image 
-              source={getStatusMarkerImage(lead.status)}
-              style={{ 
-                width: 32, 
-                height: 32,
-                opacity: (lead.isTeamLead && isManager && managerModeEnabled) ? 0.7 : 1.0
-              }}
-              resizeMode="contain"
-            />
+            {markerImage && (
+              <Image
+                source={markerImage}
+                style={{ width: 36, height: 36 }}
+                resizeMode="contain"
+              />
+            )}
           </Marker>
         );
       });
     } else {
       // For non-clustered view, limit the number of markers rendered for performance
       const markersToRender = visibleLeads.slice(0, 2000); // Limit to 2000 markers max
-      return markersToRender.map((lead) => (
-        <Marker
-          key={`${lead.id}-${lead.status}`}
-          coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-          anchor={{ x: 0.5, y: 1 }}
-          onPress={(event) => {
-            console.log('📱 Marker onPress fired for lead:', lead.id);
-            event.stopPropagation && event.stopPropagation();
-            showMenu(lead, event);
-          }}
-          onLongPress={() => handleMarkerLongPress(lead)}
-          onDragStart={() => handleDragStart(lead)}
-          onDragEnd={(e) => handleDragEnd(lead, e)}
-          draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
-          tracksViewChanges={false}
-        >
-          <Image 
-            source={getStatusMarkerImage(lead.status)}
-            style={{ 
-              width: 32, 
-              height: 32,
-              opacity: (lead.isTeamLead && isManager && managerModeEnabled) ? 0.7 : 1.0
+      
+      return markersToRender.map((lead, index) => {
+        const markerImage = getStatusMarkerImage(lead.status);
+        const fallbackColor = getStatusColor(lead.status);
+        
+        return (
+          <Marker
+            key={`${lead.id}-${lead.status}`}
+            coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
+            onPress={(event) => {
+              console.log('📱 Marker onPress fired for lead:', lead.id);
+              event.stopPropagation && event.stopPropagation();
+              showMenu(lead, event);
             }}
-            resizeMode="contain"
-          />
-        </Marker>
-      ));
+            onLongPress={() => handleMarkerLongPress(lead)}
+            onDragStart={() => handleDragStart(lead)}
+            onDragEnd={(e) => handleDragEnd(lead, e)}
+            draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
+            pinColor={!markerImage ? fallbackColor : undefined}
+            opacity={(lead.isTeamLead && isManager && managerModeEnabled) ? 0.7 : 1.0}
+            tracksViewChanges={false}
+            anchor={{ x: 0.5, y: 1 }}
+          >
+            {markerImage && (
+              <Image
+                source={markerImage}
+                style={{ width: 36, height: 36 }}
+                resizeMode="contain"
+              />
+            )}
+          </Marker>
+        );
+      });
     }
-  }, [clusteredPoints, visibleLeads, isClustering, isManager, managerModeEnabled]);
+  }, [clusteredPoints, visibleLeads, clusteringLevel, isManager, managerModeEnabled]);
 
   const memoizedMap = useMemo(
     () => (
@@ -3051,7 +3238,6 @@ export default function Tab() {
       </MapView>
     ),
     [
-      initialRegion,
       renderMapMarkers, // Use the memoized markers
       polygonPoints,
       locationPermission,
@@ -3062,7 +3248,6 @@ export default function Tab() {
       isDrawingMode,
       polygonCoordinates,
       territoryColor,
-      leads.length, // Add this to re-render when lead count changes significantly
     ]
   );
 
