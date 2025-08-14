@@ -704,17 +704,53 @@ export default function Tab() {
     setRegion(newRegion);
     saveMapState(newRegion);
 
-    // Optimize clustering based on zoom level and lead count
+    // Optimize clustering based on zoom level and lead count with additional zoom levels
     const leadCount = leads.length;
     if (leadCount > 5000) {
-      // For very large datasets, use more aggressive clustering
-      setIsClustering(newRegion.latitudeDelta >= 0.05);
+      // For very large datasets, use more aggressive clustering with 5 zoom levels
+      if (newRegion.latitudeDelta >= 0.1) {
+        setIsClustering(true);  // Very zoomed out
+      } else if (newRegion.latitudeDelta >= 0.05) {
+        setIsClustering(true);  // Zoomed out
+      } else if (newRegion.latitudeDelta >= 0.02) {
+        setIsClustering(true);  // Medium zoom
+      } else if (newRegion.latitudeDelta >= 0.01) {
+        setIsClustering(true);  // Close zoom
+      } else if (newRegion.latitudeDelta >= 0.005) {
+        setIsClustering(true);  // Very close zoom
+      } else {
+        setIsClustering(false); // Fully zoomed in - show individual markers
+      }
     } else if (leadCount > 1000) {
-      // For large datasets, use moderate clustering
-      setIsClustering(newRegion.latitudeDelta >= 0.08);
+      // For large datasets, use moderate clustering with 5 zoom levels
+      if (newRegion.latitudeDelta >= 0.12) {
+        setIsClustering(true);  // Very zoomed out
+      } else if (newRegion.latitudeDelta >= 0.08) {
+        setIsClustering(true);  // Zoomed out
+      } else if (newRegion.latitudeDelta >= 0.04) {
+        setIsClustering(true);  // Medium zoom
+      } else if (newRegion.latitudeDelta >= 0.02) {
+        setIsClustering(true);  // Close zoom
+      } else if (newRegion.latitudeDelta >= 0.01) {
+        setIsClustering(true);  // Very close zoom
+      } else {
+        setIsClustering(false); // Fully zoomed in - show individual markers
+      }
     } else {
-      // For smaller datasets, use original clustering
-    setIsClustering(newRegion.latitudeDelta >= 0.1);
+      // For smaller datasets, use original clustering with 5 zoom levels
+      if (newRegion.latitudeDelta >= 0.15) {
+        setIsClustering(true);  // Very zoomed out
+      } else if (newRegion.latitudeDelta >= 0.1) {
+        setIsClustering(true);  // Zoomed out
+      } else if (newRegion.latitudeDelta >= 0.05) {
+        setIsClustering(true);  // Medium zoom
+      } else if (newRegion.latitudeDelta >= 0.025) {
+        setIsClustering(true);  // Close zoom
+      } else if (newRegion.latitudeDelta >= 0.015) {
+        setIsClustering(true);  // Very close zoom
+      } else {
+        setIsClustering(false); // Fully zoomed in - show individual markers
+      }
     }
   }
 
@@ -744,6 +780,21 @@ export default function Tab() {
     }
     
     return statusColors[status] || statusColors[0]; // Default color
+  }
+
+  function getStatusMarkerIcon(status, isTeamLead) {
+    const markerIcons = {
+      0: require('../../assets/images/marker_new_purple_tight.png'), // New
+      1: require('../../assets/images/marker_gone_gold_tight.png'), // Gone
+      2: require('../../assets/images/marker_later_dodgerblue_tight.png'), // Later
+      3: require('../../assets/images/marker_nope_tomato_tight.png'), // Nope
+      4: require('../../assets/images/marker_sold_limegreen_tight.png'), // Sold
+      5: require('../../assets/images/marker_return_darkblue_tight.png'), // Return
+    };
+    
+    // For now, we use the same icons for team leads and regular leads
+    // In the future, we could add different icons or styling for team leads
+    return markerIcons[status] || markerIcons[0]; // Default to 'New' icon
   }
 
   async function updateLeadStatus(leadId, newStatus) {
@@ -1169,6 +1220,20 @@ export default function Tab() {
         } else {
             console.log('✅ Note saved successfully!');
             console.log('📊 Insert result:', insertResult);
+            
+            // Update the lead's mostRecentNote property in the leads array
+            setLeads(prevLeads => 
+              prevLeads.map(lead => 
+                lead.id === leadId 
+                  ? { ...lead, mostRecentNote: newNote }
+                  : lead
+              )
+            );
+            
+            // Also update the selectedLead ref if it's the same lead
+            if (selectedLead.current && selectedLead.current.id === leadId) {
+              selectedLead.current = { ...selectedLead.current, mostRecentNote: newNote };
+            }
         }
     } catch (error) {
         console.error('❌ Unexpected error adding note:', error);
@@ -1248,6 +1313,20 @@ export default function Tab() {
         } else {
             console.log('✅ Inline note saved successfully!');
             console.log('📊 Insert result:', insertResult);
+            
+            // Update the lead's mostRecentNote property in the leads array
+            setLeads(prevLeads => 
+              prevLeads.map(lead => 
+                lead.id === leadId 
+                  ? { ...lead, mostRecentNote: newNote }
+                  : lead
+              )
+            );
+            
+            // Also update the selectedLead ref if it's the same lead
+            if (selectedLead.current && selectedLead.current.id === leadId) {
+              selectedLead.current = { ...selectedLead.current, mostRecentNote: newNote };
+            }
         }
     } catch (error) {
         console.error('❌ Unexpected error adding inline note:', error);
@@ -1644,33 +1723,85 @@ export default function Tab() {
     }));
   }, [visibleLeads]);
 
-  // Optimize clustering parameters based on dataset size
+  // Optimize clustering parameters based on dataset size and zoom level
   const getClusteringOptions = useMemo(() => {
     const leadCount = leads.length;
+    const currentLatDelta = region?.latitudeDelta || 0.1;
     
     if (leadCount > 5000) {
-      return {
-        minZoom: 0,
-        maxZoom: 15,
-        minPoints: 3, // Cluster more aggressively
-        radius: 50,   // Larger radius for more clustering
-      };
+      // Adjust clustering aggressiveness based on zoom level for large datasets
+      if (currentLatDelta >= 0.05) {
+        return {
+          minZoom: 0,
+          maxZoom: 16,
+          minPoints: 4, // More aggressive clustering at far zoom
+          radius: 60,   // Larger radius for distant view
+        };
+      } else if (currentLatDelta >= 0.02) {
+        return {
+          minZoom: 0,
+          maxZoom: 17,
+          minPoints: 3, // Moderate clustering at medium zoom
+          radius: 50,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 18,
+          minPoints: 2, // Less aggressive clustering at close zoom
+          radius: 40,
+        };
+      }
     } else if (leadCount > 1000) {
-      return {
-        minZoom: 0,
-        maxZoom: 14,
-        minPoints: 2,
-        radius: 45,
-      };
+      // Adjust clustering for medium datasets
+      if (currentLatDelta >= 0.08) {
+        return {
+          minZoom: 0,
+          maxZoom: 15,
+          minPoints: 3,
+          radius: 50,
+        };
+      } else if (currentLatDelta >= 0.04) {
+        return {
+          minZoom: 0,
+          maxZoom: 16,
+          minPoints: 2,
+          radius: 45,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 17,
+          minPoints: 2,
+          radius: 40,
+        };
+      }
     } else {
-      return {
-      minZoom: 0,
-      maxZoom: 12,
-      minPoints: 2,
-      radius: 40,
-      };
+      // Adjust clustering for smaller datasets
+      if (currentLatDelta >= 0.1) {
+        return {
+          minZoom: 0,
+          maxZoom: 14,
+          minPoints: 2,
+          radius: 45,
+        };
+      } else if (currentLatDelta >= 0.05) {
+        return {
+          minZoom: 0,
+          maxZoom: 15,
+          minPoints: 2,
+          radius: 40,
+        };
+      } else {
+        return {
+          minZoom: 0,
+          maxZoom: 16,
+          minPoints: 2,
+          radius: 35,
+        };
+      }
     }
-  }, [leads.length]);
+  }, [leads.length, region?.latitudeDelta]);
 
   const [clusteredPoints, supercluster] = useClusterer(
     isClustering ? geoJSONLeads : [],
@@ -1823,9 +1954,10 @@ export default function Tab() {
                           updateLeadStatus(selectedLead.current.id, index);
                         }}
                       >
-                        <View 
-                          style={{ backgroundColor: colors[index] }} 
-                          className="h-6 w-6 mb-2 rounded-full" 
+                        <Image 
+                          source={getStatusMarkerIcon(index, false)}
+                          className="h-8 w-8 mb-2"
+                          resizeMode="contain"
                         />
                         <Text className="text-sm text-center font-medium text-gray-900">{status}</Text>
                       </TouchableOpacity>
@@ -1919,7 +2051,7 @@ export default function Tab() {
                         className="self-end p-2"
                       >
                         <Image
-                          source={require('../../assets/images/rubbish-bin-wheelie-outline-256.png')}
+                          source={require('../../assets/images/trash_can_transparent.png')}
                           className="w-8 h-8 tint-red-500"
                         />
                       </TouchableOpacity>
@@ -2021,16 +2153,17 @@ export default function Tab() {
                     <View className="mr-3 items-center">
                       {noteStatus !== null ? (
                         <>
-                          <View 
-                            style={{ backgroundColor: colors[noteStatus] }} 
-                            className="h-3 w-8 mb-1 rounded" 
+                          <Image 
+                            source={getStatusMarkerIcon(noteStatus, false)}
+                            className="h-6 w-6 mb-1"
+                            resizeMode="contain"
                           />
                           <Text className="text-xs text-center font-medium text-gray-900">
                             {statuses[noteStatus]}
                           </Text>
                         </>
                       ) : (
-                        <View className="h-3 w-8 mb-1">
+                        <View className="h-6 w-6 mb-1">
                           {/* Empty space for notes without status */}
                         </View>
                       )}
@@ -2805,8 +2938,8 @@ export default function Tab() {
               }}
             >
               <View className="w-10 h-10 rounded-full bg-blue-500 justify-center items-center">
-                <Text className="text-white font-bold">
-                  {point_count >= 1000 ? '1000+' : point_count >= 250 ? '250+' : point_count}
+                <Text className="text-white font-bold text-xs">
+                  {point_count}
                 </Text>
               </View>
             </Marker>
@@ -2818,7 +2951,6 @@ export default function Tab() {
           <Marker
             key={`${lead.id}-${lead.status}`}
             coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-            pinColor={getPinColor(lead.status, lead.isTeamLead)}
             anchor={{ x: 0.5, y: 1 }}
             onPress={(event) => {
               console.log('📱 Marker onPress fired for lead:', lead.id);
@@ -2830,7 +2962,13 @@ export default function Tab() {
             onDragEnd={(e) => handleDragEnd(lead, e)}
             draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
             tracksViewChanges={false}
-          />
+          >
+            <Image 
+              source={getStatusMarkerIcon(lead.status, lead.isTeamLead)}
+              className="h-5 w-5"
+              resizeMode="contain"
+            />
+          </Marker>
         );
       });
     } else {
@@ -2840,7 +2978,6 @@ export default function Tab() {
         <Marker
           key={`${lead.id}-${lead.status}`}
           coordinate={{ latitude: lead.latitude, longitude: lead.longitude }}
-          pinColor={getPinColor(lead.status, lead.isTeamLead)}
           anchor={{ x: 0.5, y: 1 }}
           onPress={(event) => {
             console.log('📱 Marker onPress fired for lead:', lead.id);
@@ -2852,7 +2989,13 @@ export default function Tab() {
           onDragEnd={(e) => handleDragEnd(lead, e)}
           draggable={!lead.isTeamLead || !isManager || !managerModeEnabled}
           tracksViewChanges={false}
-        />
+        >
+          <Image 
+            source={getStatusMarkerIcon(lead.status, lead.isTeamLead)}
+            className="h-8 w-8"
+            resizeMode="contain"
+          />
+        </Marker>
       ));
     }
   }, [clusteredPoints, visibleLeads, isClustering, isManager, managerModeEnabled]);
@@ -4453,9 +4596,10 @@ export default function Tab() {
                       );
                     }}
                   >
-                    <View 
-                      style={{ backgroundColor: colors[index] }} 
-                      className="h-3 w-full rounded mb-2" 
+                    <Image 
+                      source={getStatusMarkerIcon(index)}
+                      className="h-6 w-6 mb-2"
+                      resizeMode="contain"
                     />
                     <Text className={`text-xs text-center ${
                       isSelected ? 'text-white font-medium' : 'text-gray-400'
