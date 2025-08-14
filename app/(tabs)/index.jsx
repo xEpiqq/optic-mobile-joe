@@ -16,6 +16,7 @@ import {
   Keyboard,
   Animated
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
 import { useClusterer } from 'react-native-clusterer';
@@ -45,6 +46,7 @@ const BUFFER_FACTOR = 1.5; // Reduced buffer factor for better performance with 
 
 export default function Tab() {
   const { supabase } = useSupabase();
+  const insets = useSafeAreaInsets();
   const [bigMenu, setBigMenu] = useState(false);
   const [leads, setLeads] = useState([]);
   const [initialRegion, setInitialRegion] = useState({
@@ -1940,21 +1942,21 @@ export default function Tab() {
               )}
 
               {/* Status Options Section */}
-              <View className="mb-4">
+              <View className="mb-4 bg-gray-50 rounded-xl p-3 shadow-sm">
                 <View className="flex-row justify-around">
                   {statuses.map((status, index) => {
                     const isCurrentStatus = selectedLead.current.status === index;
                     return (
                       <TouchableOpacity
                         key={index}
-                        className={`items-center flex-1 mx-1 py-2 px-1 rounded-lg ${
-                          isCurrentStatus ? 'bg-gray-200' : 'bg-transparent'
+                        className={`items-center flex-1 mx-1 py-2 px-2 rounded-xl border ${
+                          isCurrentStatus ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'
                         }`}
                         onPress={() => {
                           updateLeadStatus(selectedLead.current.id, index);
                         }}
                       >
-                        <Image 
+                        <Image
                           source={getStatusMarkerIcon(index, false)}
                           className="h-8 w-8 mb-2"
                           resizeMode="contain"
@@ -1968,11 +1970,11 @@ export default function Tab() {
               
               {/* Inline Note Input Section */}
               <View className="mb-6">
-                <Text className="text-xs text-gray-600 font-medium mb-2">Add Note:</Text>
+
                 <View className="flex-row items-start">
                   <View className="flex-1">
                     <TextInput
-                      className="border border-gray-300 rounded-lg p-3 text-base bg-gray-50 min-h-20"
+                      className="rounded-lg p-3 text-base bg-gray-50 min-h-20"
                       multiline
                       placeholder={recentNote ? `Recent Note: ${recentNote.note}` : "Add a note..."}
                       value={inlineNoteText}
@@ -2000,28 +2002,28 @@ export default function Tab() {
               {/* Start Sale Content (Expanded View) */}
               {drawerState === 'expanded' && (
                 <View className="border-t border-gray-200 pt-6">
-                  <Text className="text-xl font-bold mb-4 text-center">Start Sale</Text>
+
                   
                   {/* Lead Info Section */}
                   <View className="mb-6">
-                    <Text className="text-lg font-semibold mb-3 text-gray-800">Lead Information</Text>
+                    <Text className="text-xl font-semibold mb-3 text-gray-800">Lead Information</Text>
                     <View className="space-y-3">
                       <TextInput
-                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="First Name"
                         defaultValue={firstName.current}
                         onChangeText={(text) => (firstName.current = text)}
                         placeholderTextColor="#6B7280"
                       />
                       <TextInput
-                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="Last Name"
                         defaultValue={lastName.current}
                         onChangeText={(text) => (lastName.current = text)}
                         placeholderTextColor="#6B7280"
                       />
                       <TextInput
-                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="DOB (MM/DD/YYYY)"
                         defaultValue={formatDob(dob.current)}
                         onChangeText={(text) => (dob.current = text)}
@@ -2030,7 +2032,7 @@ export default function Tab() {
                         maxLength={10}
                       />
                       <TextInput
-                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="Phone"
                         defaultValue={phone.current}
                         onChangeText={(text) => (phone.current = text)}
@@ -2038,7 +2040,7 @@ export default function Tab() {
                         placeholderTextColor="#6B7280"
                       />
                       <TextInput
-                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg border border-gray-300 py-3 px-4 text-sm"
+                        className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="Email"
                         defaultValue={email.current}
                         onChangeText={(text) => (email.current = text)}
@@ -4283,7 +4285,7 @@ export default function Tab() {
       {/* Remove the first Create New Lead button */}
 
       {/* Hamburger Menu */}
-      <View className="absolute top-8 left-4 z-10">
+      <View className="absolute left-4 z-10" style={{ top: insets.top + 16 }}>
         <TouchableOpacity onPress={() => setIsSettingsModalVisible(true)}>
           <View className="w-6 h-5 justify-between">
             <View className="w-full h-0.5 bg-gray-800 opacity-25" />
@@ -4295,7 +4297,7 @@ export default function Tab() {
       
       {/* Manager Mode Badge */}
       {isManager && managerModeEnabled && (
-        <View className="absolute top-8 left-16 z-10 bg-purple-600 px-3 py-1 rounded-full">
+        <View className="absolute left-16 z-10 bg-purple-600 px-3 py-1 rounded-full" style={{ top: insets.top + 16 }}>
           <Text className="text-white font-semibold text-xs">Manager Mode</Text>
         </View>
       )}
@@ -4303,7 +4305,8 @@ export default function Tab() {
       {/* Territory Management Button (Only visible in manager mode) */}
       {isManager && managerModeEnabled && (
                 <TouchableOpacity
-          className="absolute top-16 left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
+          className="absolute left-5 z-10 bg-gray-800 p-2 rounded-full shadow-md"
+          style={{ top: insets.top + 48 }}
           onPress={() => {
             setIsTerritoriesModalVisible(true);
             setIsModalMinimized(false);
@@ -4319,7 +4322,7 @@ export default function Tab() {
 
       {/* Drawing Mode Instructions */}
       {isDrawingMode && (
-        <View className="absolute top-16 left-4 right-4 bg-white p-4 rounded-lg shadow-lg z-20">
+        <View className="absolute left-4 right-4 bg-white p-4 rounded-lg shadow-lg z-20" style={{ top: insets.top + 48 }}>
           <Text className="text-lg font-semibold text-gray-900 mb-2">Territory Drawing Mode</Text>
           <Text className="text-gray-700 text-sm mb-2">
             Tap on the map to add boundary points ({polygonCoordinates.length} points added)
@@ -4633,7 +4636,7 @@ export default function Tab() {
 
     {/* Crosshair */}
     {!startSaleModal && (
-      <View className="absolute top-6 right-4 items-center">
+      <View className="absolute right-4 items-center" style={{ top: insets.top + 8 }}>
         <TouchableOpacity
           className="bg-transparent p-0.5 rounded-full border border-black opacity-25"
           onPress={centerMapOnUserLocation}
@@ -4645,7 +4648,7 @@ export default function Tab() {
 
     {/* Filter Button */}
     {!startSaleModal && (
-      <View className="absolute top-20 right-4 items-center">
+      <View className="absolute right-4 items-center" style={{ top: insets.top + 56 }}>
         <TouchableOpacity
           className={`p-0.5 rounded-full border border-black ${
             selectedStatuses.length < 6 
@@ -4661,7 +4664,7 @@ export default function Tab() {
 
     {/* Manager Mode Button - Only visible for managers */}
     {!startSaleModal && isManager && (
-      <View className="absolute top-36 right-4 items-center">
+      <View className="absolute right-4 items-center" style={{ top: insets.top + 104 }}>
         <TouchableOpacity
           className={`p-0.5 rounded-full border border-black ${
             managerModeEnabled 
@@ -5081,7 +5084,7 @@ export default function Tab() {
           <ScrollView className="flex-1">
             <View className="space-y-4">
               <TextInput
-                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="First Name"
                 defaultValue={firstName.current}
                 onChangeText={(text) => (firstName.current = text)}
@@ -5089,7 +5092,7 @@ export default function Tab() {
                 autoCapitalize="words"
               />
               <TextInput
-                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Last Name"
                 defaultValue={lastName.current}
                 onChangeText={(text) => (lastName.current = text)}
@@ -5097,7 +5100,7 @@ export default function Tab() {
                 autoCapitalize="words"
               />
               <TextInput
-                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Date of Birth (MM/DD/YYYY)"
                 defaultValue={dob.current}
                 onChangeText={(text) => (dob.current = text)}
@@ -5106,7 +5109,7 @@ export default function Tab() {
                 maxLength={10}
               />
               <TextInput
-                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Phone"
                 defaultValue={phone.current}
                 onChangeText={(text) => (phone.current = text)}
@@ -5114,7 +5117,7 @@ export default function Tab() {
                 placeholderTextColor="#A1A1AA"
               />
               <TextInput
-                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg border border-gray-700 py-3 px-4 text-sm"
+                className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Email"
                 defaultValue={email.current}
                 onChangeText={(text) => (email.current = text)}
