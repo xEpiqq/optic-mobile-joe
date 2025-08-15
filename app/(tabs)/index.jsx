@@ -14,10 +14,11 @@ import {
   ActivityIndicator,
   Alert,
   Keyboard,
-  Animated
+  Animated,
+  KeyboardAvoidingView
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import MapView, { PROVIDER_GOOGLE, Marker, Polygon } from 'react-native-maps';
 import { useClusterer } from 'react-native-clusterer';
 import * as Location from 'expo-location';
@@ -88,18 +89,29 @@ export default function Tab() {
   const pasapRef = useRef('');
   const ubassRef = useRef('');
   const pbassRef = useRef('');
-  const firstName = useRef('');
-  const lastName = useRef('');
-  const phone = useRef('');
-  const email = useRef('');
-  const dob = useRef('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const [dob, setDob] = useState('');
+  const [isLoadingLeadData, setIsLoadingLeadData] = useState(false);
+  const [originalStatus, setOriginalStatus] = useState(null);
+  const [noteSavedThisSession, setNoteSavedThisSession] = useState(false);
+  const [lastNonEmptyNote, setLastNonEmptyNote] = useState(null);
   const asapZip = useRef('');
   const asapAddress = useRef('');
   const asapCity = useRef('');
   const asapUasap = useRef('');
   const asapPasap = useRef('');
+  const autoSaveTimeout = useRef(null);
   const recentLead = useRef('');
   const noteInputRef = useRef(null);
+  const scrollViewRef = useRef(null);
+  const firstNameRef = useRef(null);
+  const lastNameRef = useRef(null);
+  const dobRef = useRef(null);
+  const phoneRef = useRef(null);
+  const emailRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [credentialType, setCredentialType] = useState('ASAP');
   const userTeamRef = useRef('');
@@ -174,6 +186,11 @@ export default function Tab() {
     }
   };
 
+  // Helper function to save before hiding drawer
+  const saveBeforeHiding = () => {
+    forceSaveLeadData();
+  };
+
   // Gesture handler for drawer
   const gestureHandler = useAnimatedGestureHandler({
     onStart: (_, context) => {
@@ -222,6 +239,8 @@ export default function Tab() {
         if (currentY < (expandedTarget + collapsedTarget) / 2) {
           animateDrawerTo('collapsed');
         } else {
+          // Save data before hiding
+          runOnJS(saveBeforeHiding)();
           animateDrawerTo('hidden');
         }
       } else if (velocity < -500) {
@@ -237,6 +256,8 @@ export default function Tab() {
         } else if (currentY < midPoint2) {
           animateDrawerTo('collapsed');
         } else {
+          // Save data before hiding
+          runOnJS(saveBeforeHiding)();
           animateDrawerTo('hidden');
         }
       }
@@ -332,6 +353,12 @@ export default function Tab() {
       if (region) {
         saveMapState(region);
       }
+      // Force save any pending data and clear auto-save timeout on unmount
+      forceSaveLeadData().finally(() => {
+        if (autoSaveTimeout.current) {
+          clearTimeout(autoSaveTimeout.current);
+        }
+      });
     };
   }, []);
 
@@ -859,6 +886,23 @@ export default function Tab() {
     setRecentNote(data[0]);
   }
 
+  async function fetchLastNonEmptyNote(leadId) {
+    const { data, error } = await supabase
+      .from('notes')
+      .select('note, created_at')
+      .eq('lead_id', leadId)
+      .neq('note', '') // Only get non-empty notes
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (error || !data.length) {
+      setLastNonEmptyNote(null);
+      return;
+    }
+
+    setLastNonEmptyNote(data[0]);
+  }
+
   function showFullNotesModal(leadId) {
     setIsFullNotesModalVisible(true);
     setIsModalOpen(true);
@@ -960,14 +1004,61 @@ export default function Tab() {
       await autoSaveInlineNote();
     }
     
+    // Force save previous lead's form data before switching
+    await forceSaveLeadData();
+    
     console.log('🔍 Setting lead data...');
     recentLead.current = lead;
     selectedLead.current = lead; // Set immediately for UI rendering
     setSelectedLeadId(lead.id);
     setInlineNoteText(''); // Clear inline note text for new lead
+    setLastNonEmptyNote(null); // Clear previous lead's last note
+    setOriginalStatus(lead.status); // Track original status for status change detection
+    setNoteSavedThisSession(false); // Reset note tracking for new session
+    
+    // Clear all form fields when switching to a new lead
+    setIsLoadingLeadData(true); // Prevent auto-save during clearing
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setDob('');
+    
+    // Load existing lead data from database
+    try {
+      setIsLoadingLeadData(true);
+      console.log('🔍 showMenu: Loading data for lead ID:', lead.id);
+      const { data, error } = await supabase
+        .from('leads')
+        .select('first_name, last_name, email, phone, dob')
+        .eq('id', lead.id)
+        .single();
+
+      if (error) {
+        console.error('❌ showMenu: Error fetching lead data:', error);
+      } else if (data) {
+        console.log('📊 showMenu: Data loaded from database:', data);
+        setFirstName(data.first_name || '');
+        setLastName(data.last_name || '');
+        setPhone(data.phone || '');
+        setEmail(data.email || '');
+        setDob(data.dob || '');
+        console.log('✅ showMenu: Form fields populated with loaded data');
+      } else {
+        console.log('⚠️ showMenu: No data returned from database for lead');
+      }
+    } catch (error) {
+      console.error('❌ showMenu: Error querying Supabase:', error);
+    } finally {
+      setIsLoadingLeadData(false);
+    }
+    
     // Set address and recent note immediately so they render with the menu
     setLeadAddress(lead.fullAddress || '');
     setRecentNote(lead.mostRecentNote || null);
+    
+    // Fetch the last non-empty note for placeholder purposes
+    fetchLastNonEmptyNote(lead.id);
     
     console.log('✅ Lead data set. selectedLead.current:', selectedLead.current?.id);
     console.log('✅ leadAddress:', lead.fullAddress);
@@ -979,7 +1070,7 @@ export default function Tab() {
     setDummyRender(prev => !prev);
   }
 
-  function showBigMenu(lead) {
+  async function showBigMenu(lead) {
     if (lead.isTeamLead && isManager && managerModeEnabled) {
       return;
     }
@@ -990,7 +1081,48 @@ export default function Tab() {
     setIsMarkerLongPressing(true);
     
     selectedLead.current = lead;
+    recentLead.current = lead; // Fix: Ensure recentLead.current is set for saving data
     setSelectedLeadId(lead.id);  // Set the selected lead ID
+    setOriginalStatus(lead.status); // Track original status for status change detection
+    setNoteSavedThisSession(false); // Reset note tracking for new session
+    
+    // Clear form fields first, then load existing lead data
+    setIsLoadingLeadData(true); // Prevent auto-save during clearing
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setDob('');
+    
+    try {
+      setIsLoadingLeadData(true);
+      console.log('🔍 Loading data for lead ID:', lead.id);
+      const { data, error } = await supabase
+        .from('leads')
+        .select('first_name, last_name, email, phone, dob')
+        .eq('id', lead.id)
+        .single();
+
+      if (error) {
+        console.error('❌ Error fetching lead data:', error);
+      } else if (data) {
+        console.log('📊 Data loaded from database:', data);
+        setFirstName(data.first_name || '');
+        setLastName(data.last_name || '');
+        setPhone(data.phone || '');
+        setEmail(data.email || '');
+        setDob(data.dob || '');
+        console.log('✅ Form fields populated with loaded data');
+      } else {
+        console.log('⚠️ No data returned from database for lead');
+      }
+
+      setDummyRender((prev) => !prev);
+    } catch (error) {
+      console.error('❌ Error querying Supabase:', error);
+    } finally {
+      setIsLoadingLeadData(false);
+    }
     
     // Expand drawer to show start sale content instead of opening modal
     animateDrawerTo('expanded');
@@ -1003,71 +1135,292 @@ export default function Tab() {
     }, 500);
   }
 
-  async function saveLeadData() {
-    if (!recentLead.current?.id) return;
+  async function saveLeadData(customData = null) {
+    console.log('🔄 saveLeadData called');
+    console.log('📊 recentLead.current:', recentLead.current?.id);
+    console.log('📊 isLoadingLeadData:', isLoadingLeadData);
+    
+    // Use provided data or current state values
+    const formData = customData || {
+      first_name: firstName.trim(),
+      last_name: lastName.trim(), 
+      email: email.trim(),
+      phone: phone.trim(),
+      dob: dob.trim()
+    };
+    console.log('📊 Form data to save:', formData);
+
+    if (!recentLead.current?.id) {
+      console.log('❌ No recentLead.current.id - cannot save');
+      return;
+    }
+
+    if (isLoadingLeadData) {
+      console.log('❌ Currently loading data - skipping save to prevent conflicts');
+      return;
+    }
 
     try {
       const { error } = await supabase
         .from('leads')
-        .update({
-          first_name: firstName.current.trim(),
-          last_name: lastName.current.trim(),
-          email: email.current.trim(),
-          phone: phone.current.trim(),
-          dob: dob.current.trim(),
-        })
+        .update(formData)
         .eq('id', recentLead.current.id);
 
       if (error) {
-        console.error('Error saving lead data:', error);
+        console.error('❌ Error saving lead data:', error);
+        console.error('❌ Error details:', JSON.stringify(error, null, 2));
       } else {
-        console.log('Lead data saved successfully');
+        console.log('✅ Lead data saved successfully to database');
+        console.log('✅ Saved data:', formData);
       }
     } catch (error) {
-      console.error('Unexpected error saving lead data:', error);
+      console.error('❌ Unexpected error saving lead data:', error);
     }
   }
 
-  async function closeBigMenu() {
-    // Save the lead data before closing
-    await saveLeadData();
+  // Auto-save function with shorter debouncing to prevent data loss
+  const autoSaveLeadData = () => {
+    // Clear existing timeout
+    if (autoSaveTimeout.current) {
+      clearTimeout(autoSaveTimeout.current);
+    }
     
-    // Collapse drawer instead of closing modal
+    // Set new timeout with shorter delay to prevent data loss
+    autoSaveTimeout.current = setTimeout(async () => {
+      await saveLeadData();
+    }, 500); // Reduced from 1000ms to 500ms for faster saving
+  };
+
+  // Create field-specific auto-save handlers that capture current values
+  const createFieldHandler = (fieldName, setter) => (text) => {
+    setter(text);
+    // Clear existing timeout
+    if (autoSaveTimeout.current) {
+      clearTimeout(autoSaveTimeout.current);
+    }
+    // Save with current values to avoid timing issues
+    autoSaveTimeout.current = setTimeout(async () => {
+      const currentFormData = {
+        first_name: fieldName === 'firstName' ? text.trim() : firstName.trim(),
+        last_name: fieldName === 'lastName' ? text.trim() : lastName.trim(),
+        email: fieldName === 'email' ? text.trim() : email.trim(),
+        phone: fieldName === 'phone' ? text.trim() : phone.trim(),
+        dob: fieldName === 'dob' ? text.trim() : dob.trim()
+      };
+      await saveLeadData(currentFormData);
+    }, 500);
+  };
+
+  // Function to scroll to input field when focused
+  const scrollToInput = (inputRef) => {
+    if (scrollViewRef.current && inputRef.current && drawerState === 'expanded') {
+      // Add a small delay to ensure the keyboard is visible
+      setTimeout(() => {
+        inputRef.current.measureInWindow((x, y, width, height) => {
+          const screenHeight = Dimensions.get('window').height;
+          const keyboardHeight = Platform.OS === 'ios' ? 350 : 300; // Adjusted for better coverage
+          const inputBottomY = y + height;
+          const visibleScreenHeight = screenHeight - keyboardHeight - 100; // Extra safe margin
+          
+          // If input is below the visible area when keyboard is open, scroll
+          if (inputBottomY > visibleScreenHeight) {
+            const scrollAmount = inputBottomY - visibleScreenHeight + 80; // Extra padding for better visibility
+            scrollViewRef.current.scrollTo({
+              y: scrollAmount,
+              animated: true
+            });
+          }
+        });
+      }, 150); // Slightly longer delay for keyboard animation
+    }
+  };
+
+  // Keyboard event listeners for better scroll behavior
+  useEffect(() => {
+    const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', (e) => {
+      console.log('⌨️ Keyboard shown, height:', e.endCoordinates.height);
+    });
+
+    const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+      console.log('⌨️ Keyboard hidden');
+      // Optionally scroll to top when keyboard hides
+      if (scrollViewRef.current && drawerState === 'expanded') {
+        scrollViewRef.current.scrollTo({
+          y: 0,
+          animated: true
+        });
+      }
+    });
+
+    return () => {
+      keyboardDidShowListener.remove();
+      keyboardDidHideListener.remove();
+    };
+  }, [drawerState]);
+
+  // Watch for changes to form fields and auto-save
+  useEffect(() => {
+    // Don't auto-save if we're currently loading data from database
+    if (isLoadingLeadData) {
+      console.log('🚫 Skipping auto-save - currently loading data');
+      return;
+    }
+    
+    // Only auto-save if we have a lead selected and there's actual data
+    if (recentLead.current?.id && (firstName.trim() || lastName.trim() || email.trim() || phone.trim() || dob.trim())) {
+      console.log('📝 Form data changed, triggering auto-save');
+      autoSaveLeadData();
+    }
+  }, [firstName, lastName, email, phone, dob, isLoadingLeadData]); // Watch all form fields and loading state
+
+  // Force save function that bypasses debouncing
+  const forceSaveLeadData = async () => {
+    // Clear any pending auto-save since we're force saving
+    if (autoSaveTimeout.current) {
+      clearTimeout(autoSaveTimeout.current);
+      autoSaveTimeout.current = null;
+    }
+    
+    // Only save if there's actually data to save
+    if (recentLead.current?.id && (firstName.trim() || lastName.trim() || email.trim() || phone.trim() || dob.trim())) {
+      console.log('🚀 Force saving lead data');
+      await saveLeadData();
+    }
+  };
+
+  async function saveStatusChangeNote(skipDueToRecentNote = false) {
+    // Check if status has changed and save a blank note with the new status
+    if (!selectedLead.current || originalStatus === null) {
+      return;
+    }
+
+    const currentStatus = selectedLead.current.status;
+    
+    // If status has changed, save a blank note with the new status
+    // BUT only if no other notes were saved during this session
+    if (currentStatus !== originalStatus && !noteSavedThisSession && !skipDueToRecentNote) {
+      console.log('📊 Status changed from', originalStatus, 'to', currentStatus, '- saving blank note (no other notes written)');
+      
+      try {
+        // Check authentication
+        const { data: userData, error: authError } = await supabase.auth.getUser();
+        
+        if (authError || !userData?.user) {
+          console.error('❌ Auth error when saving status change note:', authError);
+          return;
+        }
+
+        const { error } = await supabase.from('notes').insert({
+          lead_id: selectedLead.current.id,
+          note: '', // Blank note
+          created_by: userData.user.id,
+          created_at: new Date().toISOString(),
+          status: currentStatus,
+        });
+
+        if (error) {
+          console.error('❌ Error saving status change note:', error);
+        } else {
+          console.log('✅ Status change note saved successfully');
+        }
+      } catch (error) {
+        console.error('❌ Unexpected error saving status change note:', error);
+      }
+    } else if (currentStatus !== originalStatus && (noteSavedThisSession || skipDueToRecentNote)) {
+      console.log('📊 Status changed from', originalStatus, 'to', currentStatus, '- but note was already saved this session, skipping blank note');
+    }
+    
+    // Reset tracking variables
+    setOriginalStatus(null);
+    setNoteSavedThisSession(false);
+  }
+
+  async function closeBigMenu() {
+    // Close UI immediately for smooth UX
     animateDrawerTo('collapsed');
     setIsModalOpen(false);
     setIsMarkerLongPressing(false); // Clear the marker long press flag
-    firstName.current = '';
-    lastName.current = '';
-    phone.current = '';
-    email.current = '';
+    
+    // Store current form data for background saving
+    const currentFormData = {
+      first_name: firstName.trim(),
+      last_name: lastName.trim(),
+      email: email.trim(),
+      phone: phone.trim(),
+      dob: dob.trim()
+    };
+    
+    // Clear form fields immediately
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setDob('');
+    
+    // Handle data saving in background (non-blocking)
+    Promise.resolve().then(async () => {
+      try {
+        // Force save the lead data before closing to prevent data loss
+        if (recentLead.current?.id && Object.values(currentFormData).some(value => value !== '')) {
+          await saveLeadData(currentFormData);
+        }
+        
+        // Save status change note if status has changed
+        await saveStatusChangeNote();
+        
+        console.log('✅ Background save operations completed for closeBigMenu');
+      } catch (error) {
+        console.error('❌ Error in background save operations for closeBigMenu:', error);
+      }
+    });
   }
 
   async function handleDragStart(lead) {
     recentLead.current = lead;
+    setOriginalStatus(lead.status); // Track original status for status change detection
+    setNoteSavedThisSession(false); // Reset note tracking for new session
     
     // Set flag to prevent map interactions during drag operations
     setIsMarkerLongPressing(true);
 
+    // Clear form fields first, then load existing lead data
+    setIsLoadingLeadData(true); // Prevent auto-save during clearing
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setDob('');
+
     try {
+      console.log('🔍 handleDragStart: Loading data for lead ID:', lead.id);
       const { data, error } = await supabase
         .from('leads')
         .select('first_name, last_name, email, phone, dob')
         .eq('id', lead.id)
         .single();
 
-      if (error) return console.error('Error fetching lead data:', error);
+      if (error) {
+        console.error('❌ handleDragStart: Error fetching lead data:', error);
+        return;
+      }
 
       if (data) {
-        firstName.current = data.first_name || '';
-        lastName.current = data.last_name || '';
-        phone.current = data.phone || '';
-        email.current = data.email || '';
-        dob.current = data.dob || '';
+        console.log('📊 handleDragStart: Data loaded from database:', data);
+        setFirstName(data.first_name || '');
+        setLastName(data.last_name || '');
+        setPhone(data.phone || '');
+        setEmail(data.email || '');
+        setDob(data.dob || '');
+        console.log('✅ handleDragStart: Form fields populated with loaded data');
+      } else {
+        console.log('⚠️ handleDragStart: No data returned from database for lead');
       }
 
       setDummyRender((prev) => !prev);
     } catch (error) {
-      console.error('Error querying Supabase:', error);
+      console.error('❌ handleDragStart: Error querying Supabase:', error);
+    } finally {
+      setIsLoadingLeadData(false);
     }
   }
 
@@ -1222,6 +1575,7 @@ export default function Tab() {
         } else {
             console.log('✅ Note saved successfully!');
             console.log('📊 Insert result:', insertResult);
+            setNoteSavedThisSession(true); // Mark that a note was saved this session
             
             // Update the lead's mostRecentNote property in the leads array
             setLeads(prevLeads => 
@@ -1236,6 +1590,9 @@ export default function Tab() {
             if (selectedLead.current && selectedLead.current.id === leadId) {
               selectedLead.current = { ...selectedLead.current, mostRecentNote: newNote };
             }
+            
+            // Handle status change note since a real note was just saved
+            await saveStatusChangeNote(true); // Skip blank note since we just saved a real note
         }
     } catch (error) {
         console.error('❌ Unexpected error adding note:', error);
@@ -1315,6 +1672,7 @@ export default function Tab() {
         } else {
             console.log('✅ Inline note saved successfully!');
             console.log('📊 Insert result:', insertResult);
+            setNoteSavedThisSession(true); // Mark that a note was saved this session
             
             // Update the lead's mostRecentNote property in the leads array
             setLeads(prevLeads => 
@@ -1329,6 +1687,9 @@ export default function Tab() {
             if (selectedLead.current && selectedLead.current.id === leadId) {
               selectedLead.current = { ...selectedLead.current, mostRecentNote: newNote };
             }
+            
+            // Handle status change note since a real note was just saved
+            await saveStatusChangeNote(true); // Skip blank note since we just saved a real note
         }
     } catch (error) {
         console.error('❌ Unexpected error adding inline note:', error);
@@ -1421,9 +1782,9 @@ export default function Tab() {
 
         document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtStreetAddress"]').value = '${asapAddress.current}';
         document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtCity"]').value = '${asapCity.current}';
-        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtFirstName"]').value = '${firstName.current}';
-        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtLastName"]').value = '${lastName.current}';
-        document.getElementById('ctl00_ContentPlaceHolder1_txtCBR').value = '${phone.current}';
+        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtFirstName"]').value = '${firstName}';
+        document.querySelector('input[name="ctl00$ContentPlaceHolder1$txtLastName"]').value = '${lastName}';
+        document.getElementById('ctl00_ContentPlaceHolder1_txtCBR').value = '${phone}';
 
         await new Promise(resolve => setTimeout(resolve, 500));
         document.querySelector('a[onclick="initPage()"]').click();
@@ -1469,7 +1830,7 @@ export default function Tab() {
   
 
   function injectDob() {
-    const formattedDob = formatDob(dob.current);
+    const formattedDob = formatDob(dob);
     const script = `
       const waitForElement = (selector, timeout = 5000) => {
         return new Promise((resolve, reject) => {
@@ -1576,7 +1937,7 @@ export default function Tab() {
       };
   
       waitForElement('input[name="ctl00$ContentPlaceHolder1$txtContactEmail"]').then(emailInput => {
-        emailInput.value = '${email.current}';
+        emailInput.value = '${email}';
         emailInput.dispatchEvent(new Event('change', { bubbles: true }));
         waitForElement('input[value="radioSMSCapableYes"]').then(smsCapableYesRadio => {
           smsCapableYesRadio.click();
@@ -1878,12 +2239,20 @@ export default function Tab() {
               <View className="w-10 h-1 bg-gray-300 rounded-full" />
             </View>
 
-            <ScrollView 
-              className="flex-1 px-4" 
-              showsVerticalScrollIndicator={false}
-              scrollEnabled={drawerState === 'expanded'} // Only allow scrolling when fully expanded
-              bounces={false} // Disable bouncing to prevent interference with drawer gestures
+            <KeyboardAvoidingView 
+              behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+              className="flex-1"
+              keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
             >
+              <ScrollView 
+                ref={scrollViewRef}
+                className="flex-1 px-4" 
+                showsVerticalScrollIndicator={false}
+                scrollEnabled={drawerState === 'expanded'} // Only allow scrolling when fully expanded
+                bounces={false} // Disable bouncing to prevent interference with drawer gestures
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={{ paddingBottom: 50 }}
+              >
               {/* Lead Menu Content (Collapsed View) */}
               {leadAddress && (
                 <View className="mb-4">
@@ -1930,10 +2299,10 @@ export default function Tab() {
                         </TouchableOpacity>
                       ) : (
                         <TouchableOpacity 
-                          onPress={() => showBigMenu(selectedLead.current)} 
-                          className="bg-green-500 px-3 py-2 rounded-lg"
+                          onPress={() => showFullNotesModal(selectedLead.current.id)} 
+                          className="bg-purple-500 px-3 py-2 rounded-lg"
                         >
-                          <Text className="text-white text-sm font-semibold">Start Sale</Text>
+                          <Text className="text-white text-sm font-semibold">Lead History</Text>
                         </TouchableOpacity>
                       )}
                     </View>
@@ -1976,7 +2345,13 @@ export default function Tab() {
                     <TextInput
                       className="rounded-lg p-3 text-base bg-gray-50 min-h-20"
                       multiline
-                      placeholder={recentNote ? `Recent Note: ${recentNote.note}` : "Add a note..."}
+                      placeholder={
+                        recentNote && recentNote.note.trim() !== '' 
+                          ? `Recent Note: ${recentNote.note}` 
+                          : lastNonEmptyNote 
+                            ? `Last Note: ${lastNonEmptyNote.note}` 
+                            : "Add a note..."
+                      }
                       value={inlineNoteText}
                       onChangeText={setInlineNoteText}
                       textAlignVertical="top"
@@ -1988,14 +2363,7 @@ export default function Tab() {
                       }}
                     />
                   </View>
-                  {recentNote && (
-                    <TouchableOpacity 
-                      onPress={() => showFullNotesModal(selectedLead.current.id)}
-                      className="ml-2 mt-3"
-                    >
-                      <Text className="text-blue-500 text-lg font-bold">→</Text>
-                    </TouchableOpacity>
-                  )}
+
                 </View>
               </View>
 
@@ -2009,41 +2377,51 @@ export default function Tab() {
                     <Text className="text-xl font-semibold mb-3 text-gray-800">Lead Information</Text>
                     <View className="space-y-3">
                       <TextInput
+                        ref={firstNameRef}
                         className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="First Name"
-                        defaultValue={firstName.current}
-                        onChangeText={(text) => (firstName.current = text)}
+                        value={firstName}
+                        onChangeText={createFieldHandler('firstName', setFirstName)}
+                        onFocus={() => scrollToInput(firstNameRef)}
                         placeholderTextColor="#6B7280"
                       />
                       <TextInput
+                        ref={lastNameRef}
                         className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="Last Name"
-                        defaultValue={lastName.current}
-                        onChangeText={(text) => (lastName.current = text)}
+                        value={lastName}
+                        onChangeText={createFieldHandler('lastName', setLastName)}
+                        onFocus={() => scrollToInput(lastNameRef)}
                         placeholderTextColor="#6B7280"
                       />
                       <TextInput
+                        ref={dobRef}
                         className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="DOB (MM/DD/YYYY)"
-                        defaultValue={formatDob(dob.current)}
-                        onChangeText={(text) => (dob.current = text)}
+                        value={formatDob(dob)}
+                        onChangeText={createFieldHandler('dob', setDob)}
+                        onFocus={() => scrollToInput(dobRef)}
                         keyboardType="numeric"
                         placeholderTextColor="#6B7280"
                         maxLength={10}
                       />
                       <TextInput
+                        ref={phoneRef}
                         className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="Phone"
-                        defaultValue={phone.current}
-                        onChangeText={(text) => (phone.current = text)}
+                        value={phone}
+                        onChangeText={createFieldHandler('phone', setPhone)}
+                        onFocus={() => scrollToInput(phoneRef)}
                         keyboardType="phone-pad"
                         placeholderTextColor="#6B7280"
                       />
                       <TextInput
+                        ref={emailRef}
                         className="bg-gray-50 text-gray-900 placeholder-gray-500 rounded-lg py-3 px-4 text-sm"
                         placeholder="Email"
-                        defaultValue={email.current}
-                        onChangeText={(text) => (email.current = text)}
+                        value={email}
+                        onChangeText={createFieldHandler('email', setEmail)}
+                        onFocus={() => scrollToInput(emailRef)}
                         keyboardType="email-address"
                         placeholderTextColor="#6B7280"
                         autoCapitalize="none"
@@ -2072,6 +2450,7 @@ export default function Tab() {
                 </View>
               )}
             </ScrollView>
+            </KeyboardAvoidingView>
           </ReanimatedAnimated.View>
         </PanGestureHandler>
       </>
@@ -2616,6 +2995,7 @@ export default function Tab() {
             // Don't fail the lead creation for note errors, just log it
           } else {
             console.log('Note saved successfully for new lead');
+            setNoteSavedThisSession(true); // Mark that a note was saved this session
             
             // Update the lead in local state with the note
             const newNote = { 
@@ -2890,24 +3270,64 @@ export default function Tab() {
     
     console.log('🗺️ Processing map interaction');
     
-    // Auto-save inline note before closing menu
-    if (selectedLead.current && inlineNoteText.trim() !== '') {
-      await autoSaveInlineNote();
-    }
-    
-    // Close all modals
+    // Close UI immediately for smooth UX
     setIsNoteModalVisible(false);
     setIsFullNotesModalVisible(false);
     setIsModalOpen(false);
-    
-    // Hide drawer and clear lead status
     animateDrawerTo('hidden');
+    
+    // Store references for background saving
+    const currentLead = selectedLead.current;
+    const currentInlineNote = inlineNoteText.trim();
+    
+    // Clear UI state immediately
     selectedLead.current = null;
+    recentLead.current = null;
     setSelectedLeadId(null);
     setRecentNote(null);
+    setLastNonEmptyNote(null);
     setLeadAddress(null);
     setInlineNoteText(''); // Clear inline note text
+    
+    // Clear all form fields when hiding drawer
+    setFirstName('');
+    setLastName('');
+    setPhone('');
+    setEmail('');
+    setDob('');
+    
     setDummyRender((prev) => !prev);
+    
+    // Handle data saving in background (non-blocking)
+    Promise.resolve().then(async () => {
+      try {
+        // Temporarily restore lead references for saving
+        selectedLead.current = currentLead;
+        recentLead.current = currentLead;
+        
+        // Auto-save inline note before closing menu
+        if (currentLead && currentInlineNote !== '') {
+          // Temporarily restore inline note text for saving
+          setInlineNoteText(currentInlineNote);
+          await autoSaveInlineNote();
+        }
+        
+        // Force save lead form data before clearing references to prevent data loss
+        await forceSaveLeadData();
+        
+        // Save status change note if status has changed
+        await saveStatusChangeNote();
+        
+        console.log('✅ Background save operations completed');
+      } catch (error) {
+        console.error('❌ Error in background save operations:', error);
+      } finally {
+        // Ensure references are cleared after saving
+        selectedLead.current = null;
+        recentLead.current = null;
+        setInlineNoteText('');
+      }
+    });
   }
 
 
@@ -5086,24 +5506,24 @@ export default function Tab() {
               <TextInput
                 className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="First Name"
-                defaultValue={firstName.current}
-                onChangeText={(text) => (firstName.current = text)}
+                value={firstName}
+                onChangeText={createFieldHandler('firstName', setFirstName)}
                 placeholderTextColor="#A1A1AA"
                 autoCapitalize="words"
               />
               <TextInput
                 className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Last Name"
-                defaultValue={lastName.current}
-                onChangeText={(text) => (lastName.current = text)}
+                value={lastName}
+                onChangeText={createFieldHandler('lastName', setLastName)}
                 placeholderTextColor="#A1A1AA"
                 autoCapitalize="words"
               />
               <TextInput
                 className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Date of Birth (MM/DD/YYYY)"
-                defaultValue={dob.current}
-                onChangeText={(text) => (dob.current = text)}
+                value={dob}
+                onChangeText={createFieldHandler('dob', setDob)}
                 keyboardType="numeric"
                 placeholderTextColor="#A1A1AA"
                 maxLength={10}
@@ -5111,16 +5531,16 @@ export default function Tab() {
               <TextInput
                 className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Phone"
-                defaultValue={phone.current}
-                onChangeText={(text) => (phone.current = text)}
+                value={phone}
+                onChangeText={createFieldHandler('phone', setPhone)}
                 keyboardType="phone-pad"
                 placeholderTextColor="#A1A1AA"
               />
               <TextInput
                 className="bg-gray-800 text-gray-200 placeholder-gray-400 rounded-lg py-3 px-4 text-sm"
                 placeholder="Email"
-                defaultValue={email.current}
-                onChangeText={(text) => (email.current = text)}
+                value={email}
+                onChangeText={createFieldHandler('email', setEmail)}
                 keyboardType="email-address"
                 placeholderTextColor="#A1A1AA"
                 autoCapitalize="none"
