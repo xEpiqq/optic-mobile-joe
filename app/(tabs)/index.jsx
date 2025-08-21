@@ -445,12 +445,40 @@ export default function Tab() {
 
 
 
+  // Helper to dedupe by lat/lng+address to avoid stacked duplicates
+  const dedupeLeads = (leadsArray) => {
+    const seen = new Set();
+    const result = [];
+    for (const l of leadsArray) {
+      const addr = (l.fullAddress || '').toLowerCase();
+      const key = `${(l.latitude ?? 0).toFixed(6)}|${(l.longitude ?? 0).toFixed(6)}|${addr}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(l);
+      }
+    }
+    return result;
+  };
+
   // Update fetchLeads to use the new loading state
   async function fetchLeads() {
     const { data: userData } = await supabase.auth.getUser();
     if (!userData?.user) return;
     
     try {
+      // Fetch current user's organization for strict org filtering
+      const { data: userOrg, error: userOrgError } = await supabase
+        .from('profiles')
+        .select('organization')
+        .eq('user_id', userData.user.id)
+        .single();
+
+      if (userOrgError) {
+        console.error('Error fetching user organization:', userOrgError);
+        setLeads([]);
+        return;
+      }
+
       // Step 1: Get user territories (this should be fast)
       const { data: userTerritories, error: userTerritoriesError } = await supabase
           .from('users_join_territories')
@@ -469,7 +497,26 @@ export default function Tab() {
           return;
       }
       
-      const territoryIds = userTerritories.map(territory => territory.territory_id);
+      let territoryIds = userTerritories.map(territory => territory.territory_id);
+
+      // Filter territories by current organization to prevent cross-org bleed
+      const { data: territoriesByOrg, error: territoriesByOrgError } = await supabase
+        .from('territories')
+        .select('id')
+        .in('id', territoryIds)
+        .eq('organization', userOrg.organization);
+
+      if (territoriesByOrgError) {
+        console.error('Error filtering territories by organization:', territoriesByOrgError);
+        setLeads([]);
+        return;
+      }
+
+      territoryIds = (territoriesByOrg || []).map(t => t.id);
+      if (!territoryIds.length) {
+        setLeads([]);
+        return;
+      }
       
       // Step 2: Get all lead IDs in parallel chunks of territories
       const territoryChunkSize = 20; // Process territories in parallel
@@ -565,8 +612,9 @@ export default function Tab() {
               try {
                 const { data: leads, error } = await supabase
                   .from('leads')
-                  .select('id, location, status, knocks, user_id, address, address2')
-                  .in('id', leadChunk);
+                  .select('id, organization, location, status, knocks, user_id, address, address2')
+                  .in('id', leadChunk)
+                  .eq('organization', userOrg.organization);
                   
                 if (error) {
                   throw error;
@@ -612,7 +660,7 @@ export default function Tab() {
           fullAddress: `${lead.address || ''} ${lead.address2 || ''}`.trim()
       }));
       
-      setLeads(formattedLeads);
+      setLeads(dedupeLeads(formattedLeads));
           }
         } catch (batchError) {
           console.error('Error processing batch:', batchError);
@@ -635,7 +683,7 @@ export default function Tab() {
           mostRecentNote: notesByLead[lead.id] || null
         }));
       
-      setLeads(formattedLeads);
+      setLeads(dedupeLeads(formattedLeads));
       console.log(`Successfully loaded ${formattedLeads.length} leads out of ${allLeadIds.length} total`);
       
       // Show success message for large datasets
@@ -977,8 +1025,13 @@ export default function Tab() {
 
     if (error) return console.error('Error fetching address:', error);
 
-    const fullAddress = `${data.address} ${data.address2 || ''}`;
-    setLeadAddress(fullAddress.trim());
+    // Set both full display string and individual parts on selectedLead for UI
+    const fullAddress = `${data.address || ''} ${data.address2 || ''}`.trim();
+    setLeadAddress(fullAddress);
+    if (selectedLead.current) {
+      selectedLead.current.address = data.address || '';
+      selectedLead.current.address2 = data.address2 || '';
+    }
   }
 
   function openMaps() {
@@ -1057,6 +1110,12 @@ export default function Tab() {
     setLeadAddress(lead.fullAddress || '');
     setRecentNote(lead.mostRecentNote || null);
     
+    // Ensure address components are available for display
+    if (selectedLead.current) {
+      selectedLead.current.address = lead.address || '';
+      selectedLead.current.address2 = lead.address2 || '';
+    }
+    
     // Fetch the last non-empty note for placeholder purposes
     fetchLastNonEmptyNote(lead.id);
     
@@ -1085,6 +1144,13 @@ export default function Tab() {
     setSelectedLeadId(lead.id);  // Set the selected lead ID
     setOriginalStatus(lead.status); // Track original status for status change detection
     setNoteSavedThisSession(false); // Reset note tracking for new session
+    
+    // Set address data for display
+    setLeadAddress(lead.fullAddress || '');
+    if (selectedLead.current) {
+      selectedLead.current.address = lead.address || '';
+      selectedLead.current.address2 = lead.address2 || '';
+    }
     
     // Clear form fields first, then load existing lead data
     setIsLoadingLeadData(true); // Prevent auto-save during clearing
@@ -2273,7 +2339,16 @@ export default function Tab() {
                         </View>
                       ) : (
                         <>
-                          <Text className="text-black font-bold text-base">{leadAddress}</Text>
+                          <View className="flex-1">
+                            <Text className="text-black font-bold text-base">
+                              {selectedLead.current?.address || leadAddress}
+                            </Text>
+                            {selectedLead.current?.address2 ? (
+                              <Text className="text-gray-700 text-sm">
+                                {selectedLead.current.address2}
+                              </Text>
+                            ) : null}
+                          </View>
                           <TouchableOpacity onPress={openMaps} className="p-2 ml-2">
                             <Image
                               source={require('../../assets/images/directions.png')}
